@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "audit": "node scripts/audit-url.mjs"
+    "audit": "node scripts/audit-url.mjs",
+    "crawl": "node scripts/crawl-site.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.2",

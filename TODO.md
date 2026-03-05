@@ -9,6 +9,7 @@ Meaningfulness: Highest. Keyboard failures are common, severe, and only partiall
 Implementation direction: Add scripted journey support for menus, dialogs, forms, tabs, accordions, and other interactive flows.
 
 2. `P1` Multi-page crawl and aggregation
+Status: Implemented in this iteration.
 Meaningfulness: Very high. Single-page audits miss repeated template defects and navigation-wide issues.
 Implementation direction: Crawl a limited set of same-origin pages from nav links or a sitemap and aggregate defects.
 

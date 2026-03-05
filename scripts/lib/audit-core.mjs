@@ -1,0 +1,612 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import AxeBuilder from "@axe-core/playwright";
+import { chromium } from "playwright";
+
+export function slugifyUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  const hostname = url.hostname.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  const pathname = url.pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  return [hostname, pathname].filter(Boolean).join("-") || "page";
+}
+
+export function timestampForFile(date) {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function summarizeImpactCounts(violations) {
+  return violations.reduce(
+    (counts, violation) => {
+      const impact = violation.impact || "unknown";
+      counts[impact] = (counts[impact] || 0) + 1;
+      return counts;
+    },
+    { critical: 0, serious: 0, moderate: 0, minor: 0, unknown: 0 },
+  );
+}
+
+function trimText(value, length = 120) {
+  if (!value) {
+    return "";
+  }
+
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed.length > length ? `${collapsed.slice(0, length - 1)}...` : collapsed;
+}
+
+function simplifyAxeResults(items) {
+  return items.map((item) => ({
+    id: item.id,
+    impact: item.impact || "unknown",
+    description: item.description,
+    help: item.help,
+    helpUrl: item.helpUrl,
+    tags: item.tags,
+    affectedNodes: item.nodes.length,
+    nodes: item.nodes.slice(0, 10).map((node) => ({
+      target: node.target,
+      html: trimText(node.html, 160),
+      failureSummary: trimText(node.failureSummary, 240),
+    })),
+  }));
+}
+
+async function collectActiveElement(page) {
+  return page.evaluate(() => {
+    function selectorFor(element) {
+      if (!element || !(element instanceof Element)) {
+        return "document";
+      }
+
+      if (element.id) {
+        return `#${element.id}`;
+      }
+
+      const parts = [];
+      let current = element;
+
+      while (current && current instanceof Element && parts.length < 4) {
+        let part = current.tagName.toLowerCase();
+
+        if (current.classList.length > 0) {
+          part += `.${Array.from(current.classList).slice(0, 2).join(".")}`;
+        }
+
+        if (current.parentElement) {
+          const siblings = Array.from(current.parentElement.children).filter(
+            (node) => node.tagName === current.tagName,
+          );
+          if (siblings.length > 1) {
+            const position = siblings.indexOf(current) + 1;
+            part += `:nth-of-type(${position})`;
+          }
+        }
+
+        parts.unshift(part);
+        current = current.parentElement;
+      }
+
+      return parts.join(" > ");
+    }
+
+    const active = document.activeElement;
+    const docEl = document.documentElement;
+    const body = document.body;
+
+    if (!active || active === docEl || active === body) {
+      return {
+        selector: "document",
+        tag: active ? active.tagName.toLowerCase() : "none",
+        role: null,
+        label: "",
+        signature: "document",
+        hasVisibleFocus: false,
+        isBodyFocus: true,
+      };
+    }
+
+    const style = window.getComputedStyle(active);
+    const rect = active.getBoundingClientRect();
+    const label =
+      active.getAttribute("aria-label") ||
+      active.getAttribute("title") ||
+      active.getAttribute("name") ||
+      active.getAttribute("id") ||
+      ("value" in active && typeof active.value === "string" ? active.value : "") ||
+      active.textContent ||
+      "";
+
+    const outlineWidth = Number.parseFloat(style.outlineWidth || "0");
+    const hasVisibleFocus =
+      active.matches(":focus-visible") ||
+      (style.outlineStyle !== "none" && outlineWidth > 0) ||
+      style.boxShadow !== "none";
+
+    return {
+      selector: selectorFor(active),
+      tag: active.tagName.toLowerCase(),
+      role: active.getAttribute("role"),
+      label: label.replace(/\s+/g, " ").trim().slice(0, 120),
+      signature: `${selectorFor(active)}|${active.getAttribute("role") || ""}`,
+      hasVisibleFocus,
+      isBodyFocus: false,
+      rect: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+    };
+  });
+}
+
+async function runKeyboardAudit(page, tabLimit) {
+  const stops = [];
+  const seen = new Set();
+  const warnings = new Set();
+  let loopDetected = false;
+
+  await page.locator("body").focus();
+
+  for (let step = 1; step <= tabLimit; step += 1) {
+    await page.keyboard.press("Tab");
+    await page.waitForTimeout(75);
+
+    const active = await collectActiveElement(page);
+    active.step = step;
+    stops.push(active);
+
+    if (active.isBodyFocus) {
+      warnings.add(`Tab step ${step} left focus on the document body.`);
+    }
+
+    if (!active.isBodyFocus && !active.hasVisibleFocus) {
+      warnings.add(`Tab step ${step} reached ${active.selector} without an obvious visible focus indicator.`);
+    }
+
+    if (seen.has(active.signature)) {
+      loopDetected = true;
+      break;
+    }
+
+    seen.add(active.signature);
+  }
+
+  let reverseNavigationWorked = null;
+  if (stops.length > 0) {
+    const beforeReverse = stops[stops.length - 1].signature;
+    await page.keyboard.press("Shift+Tab");
+    await page.waitForTimeout(75);
+    const reverseStop = await collectActiveElement(page);
+    reverseNavigationWorked = reverseStop.signature !== beforeReverse;
+
+    if (!reverseNavigationWorked) {
+      warnings.add("Reverse keyboard navigation did not move focus to a different element.");
+    }
+  }
+
+  return {
+    tabLimit,
+    sampledStops: stops.length,
+    uniqueStops: seen.size,
+    loopDetected,
+    reverseNavigationWorked,
+    warnings: Array.from(warnings),
+    stops,
+  };
+}
+
+async function collectSemanticSignals(page) {
+  return page.evaluate(() => {
+    function selectorFor(element) {
+      if (element.id) {
+        return `#${element.id}`;
+      }
+
+      return element.tagName.toLowerCase();
+    }
+
+    function textFor(element) {
+      return (element.innerText || element.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+    }
+
+    function hasAssociatedLabel(element) {
+      if ("labels" in element && element.labels && element.labels.length > 0) {
+        return true;
+      }
+
+      const id = element.getAttribute("id");
+      return Boolean(id && document.querySelector(`label[for="${CSS.escape(id)}"]`));
+    }
+
+    function hasAccessibleName(element) {
+      const ariaLabel = element.getAttribute("aria-label");
+      if (ariaLabel && ariaLabel.trim()) {
+        return true;
+      }
+
+      const labelledBy = element.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const text = labelledBy
+          .split(/\s+/)
+          .map((id) => document.getElementById(id))
+          .filter(Boolean)
+          .map((node) => textFor(node))
+          .join(" ")
+          .trim();
+
+        if (text) {
+          return true;
+        }
+      }
+
+      if (element instanceof HTMLImageElement) {
+        return element.hasAttribute("alt");
+      }
+
+      if (element instanceof HTMLInputElement) {
+        if (element.value && element.value.trim()) {
+          return true;
+        }
+
+        if (element.placeholder && element.placeholder.trim()) {
+          return true;
+        }
+      }
+
+      if (hasAssociatedLabel(element)) {
+        return true;
+      }
+
+      const title = element.getAttribute("title");
+      if (title && title.trim()) {
+        return true;
+      }
+
+      return Boolean(textFor(element));
+    }
+
+    function describe(element) {
+      return {
+        selector: selectorFor(element),
+        text: textFor(element),
+      };
+    }
+
+    const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((heading) => ({
+      level: Number.parseInt(heading.tagName.slice(1), 10),
+      text: textFor(heading),
+    }));
+
+    const headingSkips = [];
+    for (let index = 1; index < headings.length; index += 1) {
+      const previous = headings[index - 1];
+      const current = headings[index];
+
+      if (current.level > previous.level + 1) {
+        headingSkips.push({
+          from: previous.level,
+          to: current.level,
+          text: current.text,
+        });
+      }
+    }
+
+    const imagesMissingAlt = Array.from(document.querySelectorAll("img")).filter(
+      (image) => !image.hasAttribute("alt"),
+    );
+
+    const unlabeledControls = Array.from(
+      document.querySelectorAll('input:not([type="hidden"]), select, textarea'),
+    ).filter((element) => !hasAccessibleName(element));
+
+    const namelessButtons = Array.from(
+      document.querySelectorAll('button, input[type="button"], input[type="submit"], input[type="reset"], [role="button"]'),
+    ).filter((element) => !hasAccessibleName(element));
+
+    const namelessLinks = Array.from(document.querySelectorAll('a[href], [role="link"]')).filter(
+      (element) => !hasAccessibleName(element),
+    );
+
+    const positiveTabindex = Array.from(document.querySelectorAll("[tabindex]")).filter(
+      (element) => Number.parseInt(element.getAttribute("tabindex") || "0", 10) > 0,
+    );
+
+    const landmarks = Array.from(
+      document.querySelectorAll(
+        "main, nav, header, footer, aside, [role='main'], [role='navigation'], [role='banner'], [role='contentinfo'], [role='complementary'], [role='search'], [role='region']",
+      ),
+    ).map((element) => selectorFor(element));
+
+    return {
+      page: {
+        title: document.title,
+        lang: document.documentElement.getAttribute("lang"),
+      },
+      landmarks: {
+        count: landmarks.length,
+        selectors: landmarks.slice(0, 15),
+      },
+      headings,
+      headingSkips,
+      imagesMissingAlt: imagesMissingAlt.slice(0, 10).map(describe),
+      unlabeledControls: unlabeledControls.slice(0, 10).map(describe),
+      namelessButtons: namelessButtons.slice(0, 10).map(describe),
+      namelessLinks: namelessLinks.slice(0, 10).map(describe),
+      positiveTabindex: positiveTabindex.slice(0, 10).map(describe),
+      counts: {
+        imagesMissingAlt: imagesMissingAlt.length,
+        unlabeledControls: unlabeledControls.length,
+        namelessButtons: namelessButtons.length,
+        namelessLinks: namelessLinks.length,
+        positiveTabindex: positiveTabindex.length,
+      },
+    };
+  });
+}
+
+function buildSummary(axeViolations, keyboard, semantics) {
+  const impactCounts = summarizeImpactCounts(axeViolations);
+  const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
+  const screenReaderWarnings = [];
+
+  if (!semantics.page.lang) {
+    screenReaderWarnings.push("The page is missing a root html[lang] attribute.");
+  }
+
+  if (semantics.landmarks.count === 0) {
+    screenReaderWarnings.push("No page landmarks were detected.");
+  }
+
+  if (semantics.headingSkips.length > 0) {
+    screenReaderWarnings.push(`Detected ${semantics.headingSkips.length} heading level skip(s).`);
+  }
+
+  if (semantics.counts.unlabeledControls > 0) {
+    screenReaderWarnings.push(`Detected ${semantics.counts.unlabeledControls} unlabeled form control(s).`);
+  }
+
+  if (semantics.counts.namelessButtons > 0) {
+    screenReaderWarnings.push(`Detected ${semantics.counts.namelessButtons} button(s) without an accessible name.`);
+  }
+
+  if (semantics.counts.namelessLinks > 0) {
+    screenReaderWarnings.push(`Detected ${semantics.counts.namelessLinks} link(s) without an accessible name.`);
+  }
+
+  if (semantics.counts.imagesMissingAlt > 0) {
+    screenReaderWarnings.push(`Detected ${semantics.counts.imagesMissingAlt} image(s) missing alt text.`);
+  }
+
+  if (semantics.counts.positiveTabindex > 0) {
+    keyboard.warnings.push(
+      `Detected ${semantics.counts.positiveTabindex} element(s) using positive tabindex, which can create confusing tab order.`,
+    );
+  }
+
+  return {
+    axeViolationCount: axeViolations.length,
+    axeImpactCounts: impactCounts,
+    contrastViolationCount: contrastViolations.length,
+    keyboardWarningCount: keyboard.warnings.length,
+    screenReaderWarningCount: screenReaderWarnings.length,
+    screenReaderWarnings,
+  };
+}
+
+export function renderMarkdown(report) {
+  const lines = [];
+  const { metadata, summary, keyboard, semantics, axe } = report;
+
+  lines.push(`# Accessibility Audit: ${metadata.title || metadata.url}`);
+  lines.push("");
+  lines.push(`- URL: ${metadata.url}`);
+  lines.push(`- Title: ${metadata.title || "(no title)"}`);
+  lines.push(`- Tested at: ${metadata.testedAt}`);
+  lines.push(`- Axe violations: ${summary.axeViolationCount}`);
+  lines.push(`- Contrast violations: ${summary.contrastViolationCount}`);
+  lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
+  lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
+  lines.push("");
+  lines.push("## Axe Summary");
+  lines.push("");
+  lines.push(
+    `Critical: ${summary.axeImpactCounts.critical}, Serious: ${summary.axeImpactCounts.serious}, Moderate: ${summary.axeImpactCounts.moderate}, Minor: ${summary.axeImpactCounts.minor}, Unknown: ${summary.axeImpactCounts.unknown}`,
+  );
+  lines.push("");
+
+  if (axe.violations.length === 0) {
+    lines.push("No axe violations were detected on the sampled page state.");
+    lines.push("");
+  } else {
+    for (const violation of axe.violations.slice(0, 10)) {
+      lines.push(`### ${violation.id} (${violation.impact})`);
+      lines.push("");
+      lines.push(`${violation.help} Affected nodes: ${violation.affectedNodes}`);
+      lines.push("");
+      for (const node of violation.nodes.slice(0, 3)) {
+        lines.push(`- ${node.target.join(", ")} :: ${node.failureSummary || node.html}`);
+      }
+      lines.push("");
+    }
+  }
+
+  lines.push("## Keyboard Navigation");
+  lines.push("");
+  lines.push(`- Sampled tab stops: ${keyboard.sampledStops}`);
+  lines.push(`- Unique tab stops: ${keyboard.uniqueStops}`);
+  lines.push(`- Focus loop detected: ${keyboard.loopDetected ? "yes" : "no"}`);
+  lines.push(
+    `- Reverse Shift+Tab moved focus: ${
+      keyboard.reverseNavigationWorked === null ? "not tested" : keyboard.reverseNavigationWorked ? "yes" : "no"
+    }`,
+  );
+  lines.push("");
+
+  if (keyboard.warnings.length === 0) {
+    lines.push("No keyboard warnings were generated by the sampled traversal.");
+    lines.push("");
+  } else {
+    for (const warning of keyboard.warnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Screen Reader Proxies");
+  lines.push("");
+  lines.push(`- html[lang]: ${semantics.page.lang || "(missing)"}`);
+  lines.push(`- Landmarks found: ${semantics.landmarks.count}`);
+  lines.push(`- Heading skips: ${semantics.headingSkips.length}`);
+  lines.push(`- Images missing alt: ${semantics.counts.imagesMissingAlt}`);
+  lines.push(`- Unlabeled controls: ${semantics.counts.unlabeledControls}`);
+  lines.push(`- Nameless buttons: ${semantics.counts.namelessButtons}`);
+  lines.push(`- Nameless links: ${semantics.counts.namelessLinks}`);
+  lines.push("");
+
+  if (summary.screenReaderWarnings.length === 0) {
+    lines.push("No screen-reader proxy warnings were generated beyond axe findings.");
+    lines.push("");
+  } else {
+    for (const warning of summary.screenReaderWarnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Limits");
+  lines.push("");
+  lines.push("- This is an automated audit of one page state, not a full manual accessibility review.");
+  lines.push("- Confirm dynamic widgets, announcements, and real assistive-technology behavior manually.");
+  lines.push("");
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderAggregateMarkdown(aggregateReport) {
+  const lines = [];
+  const { metadata, summary, pages } = aggregateReport;
+
+  lines.push(`# Accessibility Crawl: ${metadata.seedUrl}`);
+  lines.push("");
+  lines.push(`- Seed URL: ${metadata.seedUrl}`);
+  lines.push(`- Pages audited: ${summary.pagesAudited}`);
+  lines.push(`- Pages requested: ${metadata.maxPages}`);
+  lines.push(`- Tested at: ${metadata.testedAt}`);
+  lines.push(`- Total axe violations: ${summary.totalAxeViolations}`);
+  lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
+  lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
+  lines.push("");
+  lines.push("## Top Violation Rules");
+  lines.push("");
+
+  if (summary.topViolationRules.length === 0) {
+    lines.push("No axe violations were detected across the sampled pages.");
+    lines.push("");
+  } else {
+    for (const rule of summary.topViolationRules) {
+      lines.push(`- ${rule.id}: ${rule.count}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Per-Page Summary");
+  lines.push("");
+  for (const page of pages) {
+    lines.push(`### ${page.metadata.title || page.metadata.url}`);
+    lines.push("");
+    lines.push(`- URL: ${page.metadata.url}`);
+    lines.push(`- Axe violations: ${page.summary.axeViolationCount}`);
+    lines.push(`- Keyboard warnings: ${page.summary.keyboardWarningCount}`);
+    lines.push(`- Screen-reader warnings: ${page.summary.screenReaderWarningCount}`);
+    lines.push("");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export async function createBrowserContext() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 960 },
+    colorScheme: "light",
+  });
+
+  return {
+    browser,
+    context,
+  };
+}
+
+export async function closeBrowserContext(resources) {
+  const { context, browser } = resources;
+  await context.close().catch(() => {});
+  await browser.close().catch(() => {});
+}
+
+export async function auditPageInContext(context, options) {
+  const {
+    url,
+    tabLimit = 20,
+    timeout = 45000,
+    wait = 1000,
+  } = options;
+
+  const testedAt = new Date();
+  const page = await context.newPage();
+
+  try {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout,
+    });
+
+    await page.waitForLoadState("networkidle", {
+      timeout: Math.min(timeout, 15000),
+    }).catch(() => {});
+
+    if (wait > 0) {
+      await page.waitForTimeout(wait);
+    }
+
+    const title = await page.title();
+    const axeRaw = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa", "best-practice"])
+      .analyze();
+
+    const keyboard = await runKeyboardAudit(page, tabLimit);
+    const semantics = await collectSemanticSignals(page);
+    const summary = buildSummary(axeRaw.violations, keyboard, semantics);
+
+    return {
+      metadata: {
+        url: page.url(),
+        title,
+        testedAt: testedAt.toISOString(),
+        viewport: { width: 1440, height: 960 },
+      },
+      summary,
+      axe: {
+        passes: axeRaw.passes.length,
+        violations: simplifyAxeResults(axeRaw.violations),
+        incomplete: simplifyAxeResults(axeRaw.incomplete),
+        inapplicable: axeRaw.inapplicable.length,
+      },
+      keyboard,
+      semantics,
+    };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+export async function writeReportFiles(outBase, report, renderFn = renderMarkdown) {
+  const markdown = renderFn(report);
+  await fs.mkdir(path.dirname(outBase), { recursive: true });
+  await fs.writeFile(`${outBase}.json`, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await fs.writeFile(`${outBase}.md`, markdown, "utf8");
+}

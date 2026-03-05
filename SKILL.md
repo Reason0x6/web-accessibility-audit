@@ -15,6 +15,7 @@ From the skill directory:
 npm install
 npx playwright install chromium
 npm run audit -- --url https://example.com
+npm run crawl -- --url https://www.wsp.com --max-pages 5
 ```
 
 The script writes reports into `reports/` by default and prints the output paths to stdout.
@@ -24,8 +25,9 @@ The script writes reports into `reports/` by default and prints the output paths
 1. Confirm the target page is reachable without credentials. If it is not, stop and ask for a reproducible public URL or a session setup plan.
 2. Install dependencies if `node_modules/` is missing.
 3. Run `npm run audit -- --url <page-url>`.
-4. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
-5. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
+4. Use `npm run crawl -- --url <seed-url> --max-pages <n>` when the user needs repeated-template coverage across several same-origin pages.
+5. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
+6. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
 
 ## Command Options
 
@@ -33,6 +35,7 @@ Run the script with:
 
 ```powershell
 node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000]
 ```
 
 Supported options:
@@ -42,6 +45,7 @@ Supported options:
 - `--tab-limit`: Maximum number of `Tab` presses to sample for keyboard traversal.
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
+- `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
 
 ## What The Script Checks
 
@@ -50,6 +54,7 @@ Supported options:
 - Focus visibility heuristics for visited tab stops.
 - Screen-reader proxy checks such as missing landmarks, heading skips, unlabeled controls, unnamed buttons or links, missing `lang`, and missing `alt`.
 - Contrast findings from axe (`color-contrast`).
+- Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
 
 ## Interpretation Rules
 
