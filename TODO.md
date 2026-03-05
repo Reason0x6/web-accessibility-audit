@@ -45,6 +45,7 @@ Meaningfulness: High. Focus indicators, charts, icons, and UI states are easy to
 Implementation direction: Add heuristics for focus-ring presence and non-text contrast candidates.
 
 9. `P1` Real screen-reader testing
+Status: Implemented in this iteration as a manual test matrix and workflow reference.
 Meaningfulness: High, but partially outside browser-only automation.
 Implementation direction: Document a manual test matrix for NVDA, JAWS, VoiceOver, and TalkBack with reproducible steps.
 

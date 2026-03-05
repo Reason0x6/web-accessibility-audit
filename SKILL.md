@@ -29,6 +29,7 @@ Use `--journey-file <json>` when the user needs a scripted keyboard flow or page
 4. Use `npm run crawl -- --url <seed-url> --max-pages <n>` when the user needs repeated-template coverage across several same-origin pages.
 5. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
 6. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
+7. When the user asks for real screen-reader validation, load [references/screen-reader-manual-matrix.md](./references/screen-reader-manual-matrix.md) and use its matrix and recording format.
 
 ## Command Options
 
@@ -95,6 +96,7 @@ State-change example: [tp7-invalid-url-state.json](./scripts/examples/tp7-invali
 - Report axe violations as concrete defects unless the page state is obviously incomplete.
 - Report keyboard traversal warnings as heuristics that still need manual confirmation on complex widgets, menus, dialogs, and SPAs.
 - Report screen-reader proxy issues as structural accessibility problems. Do not claim that a real screen-reader experience has been fully validated unless a human tested with NVDA, JAWS, VoiceOver, or TalkBack.
+- Use the manual matrix reference when the user needs reproducible assistive-technology coverage beyond browser automation.
 - Keep contrast findings separate in the summary because they are usually straightforward to remediate.
 
 ## Limitations
