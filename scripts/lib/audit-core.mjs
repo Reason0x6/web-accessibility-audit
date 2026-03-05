@@ -480,6 +480,185 @@ async function collectSemanticSignals(page) {
   });
 }
 
+async function describeFocusedElement(page) {
+  return page.evaluate(() => {
+    const active = document.activeElement;
+    if (!active || !(active instanceof Element)) {
+      return {
+        selector: "document",
+        text: "",
+      };
+    }
+
+    const selector = active.id ? `#${active.id}` : active.tagName.toLowerCase();
+    const text = (active.innerText || active.textContent || active.getAttribute("aria-label") || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 100);
+
+    return {
+      selector,
+      text,
+    };
+  });
+}
+
+async function focusMatches(page, matcher) {
+  return page.evaluate((currentMatcher) => {
+    const active = document.activeElement;
+    if (!active || !(active instanceof Element)) {
+      return false;
+    }
+
+    if (currentMatcher.selector) {
+      try {
+        return active.matches(currentMatcher.selector);
+      } catch {
+        return false;
+      }
+    }
+
+    if (currentMatcher.text) {
+      const text = (active.innerText || active.textContent || active.getAttribute("aria-label") || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      return text.toLowerCase().includes(String(currentMatcher.text).toLowerCase());
+    }
+
+    if (currentMatcher.href) {
+      return active.getAttribute("href") === currentMatcher.href;
+    }
+
+    return false;
+  }, matcher);
+}
+
+async function runJourney(page, journey) {
+  if (!journey || !Array.isArray(journey.steps) || journey.steps.length === 0) {
+    return null;
+  }
+
+  const results = [];
+  let failures = 0;
+
+  for (let index = 0; index < journey.steps.length; index += 1) {
+    const step = journey.steps[index];
+    const stepNumber = index + 1;
+    const result = {
+      step: stepNumber,
+      action: step.action,
+      label: step.label || null,
+      success: true,
+    };
+
+    try {
+      switch (step.action) {
+        case "tab": {
+          const count = Number.isFinite(step.count) ? step.count : 1;
+          for (let cursor = 0; cursor < count; cursor += 1) {
+            await page.keyboard.press(step.shift ? "Shift+Tab" : "Tab");
+            await page.waitForTimeout(step.wait ?? 75);
+          }
+          result.focus = await describeFocusedElement(page);
+          break;
+        }
+        case "tab_until": {
+          const maxTabs = Number.isFinite(step.maxTabs) ? step.maxTabs : 20;
+          let matched = false;
+          for (let cursor = 0; cursor < maxTabs; cursor += 1) {
+            await page.keyboard.press(step.shift ? "Shift+Tab" : "Tab");
+            await page.waitForTimeout(step.wait ?? 75);
+            if (await focusMatches(page, step)) {
+              matched = true;
+              break;
+            }
+          }
+          result.focus = await describeFocusedElement(page);
+          if (!matched) {
+            throw new Error(`Focus did not reach the requested target within ${maxTabs} tab step(s).`);
+          }
+          break;
+        }
+        case "press": {
+          if (!step.key) {
+            throw new Error("press action requires a key.");
+          }
+          await page.keyboard.press(step.key);
+          await page.waitForTimeout(step.wait ?? 150);
+          result.focus = await describeFocusedElement(page);
+          break;
+        }
+        case "type": {
+          if (typeof step.text !== "string") {
+            throw new Error("type action requires text.");
+          }
+          await page.keyboard.type(step.text, { delay: step.delay ?? 20 });
+          await page.waitForTimeout(step.wait ?? 75);
+          result.focus = await describeFocusedElement(page);
+          break;
+        }
+        case "wait": {
+          await page.waitForTimeout(step.ms ?? 250);
+          break;
+        }
+        case "expect_url_includes": {
+          const url = page.url();
+          if (!url.includes(step.value)) {
+            throw new Error(`URL "${url}" does not include "${step.value}".`);
+          }
+          result.url = url;
+          break;
+        }
+        case "expect_visible": {
+          if (!step.selector) {
+            throw new Error("expect_visible action requires a selector.");
+          }
+          await page.locator(step.selector).first().waitFor({ state: "visible", timeout: step.timeout ?? 5000 });
+          result.selector = step.selector;
+          break;
+        }
+        case "expect_focused": {
+          if (!(await focusMatches(page, step))) {
+            throw new Error("Focused element does not match the expected target.");
+          }
+          result.focus = await describeFocusedElement(page);
+          break;
+        }
+        case "expect_text": {
+          if (!step.selector || typeof step.value !== "string") {
+            throw new Error("expect_text action requires selector and value.");
+          }
+          const text = await page.locator(step.selector).first().innerText({ timeout: step.timeout ?? 5000 });
+          if (!text.toLowerCase().includes(step.value.toLowerCase())) {
+            throw new Error(`Text for ${step.selector} did not include "${step.value}".`);
+          }
+          result.selector = step.selector;
+          break;
+        }
+        default:
+          throw new Error(`Unsupported journey action: ${step.action}`);
+      }
+    } catch (error) {
+      result.success = false;
+      result.error = error instanceof Error ? error.message : String(error);
+      failures += 1;
+    }
+
+    results.push(result);
+    if (!result.success && step.stopOnFailure !== false) {
+      break;
+    }
+  }
+
+  return {
+    name: journey.name || "journey",
+    success: failures === 0,
+    totalSteps: results.length,
+    failedSteps: failures,
+    results,
+  };
+}
+
 async function collectReflowChecks(page, widths) {
   const originalViewport = page.viewportSize() || { width: 1440, height: 960 };
   const checks = [];
@@ -602,6 +781,7 @@ function buildSummary(axeViolations, keyboard, semantics, reflowChecks = []) {
     severityBuckets: buildSeverityBuckets(simplifiedViolations),
     wcagSummary: buildWcagSummary(simplifiedViolations),
     contrastViolationCount: contrastViolations.length,
+    journeyFailureCount: 0,
     keyboardWarningCount: keyboard.warnings.length,
     reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
     screenReaderWarningCount: screenReaderWarnings.length,
@@ -622,6 +802,7 @@ export function renderMarkdown(report) {
   lines.push(`- Contrast violations: ${summary.contrastViolationCount}`);
   lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
   lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
+  lines.push(`- Journey failures: ${summary.journeyFailureCount}`);
   lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
   lines.push("");
   lines.push("## Axe Summary");
@@ -694,6 +875,24 @@ export function renderMarkdown(report) {
   } else {
     for (const warning of keyboard.warnings) {
       lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  if (report.journey) {
+    lines.push("## Keyboard Journey");
+    lines.push("");
+    lines.push(`- Journey: ${report.journey.name}`);
+    lines.push(`- Success: ${report.journey.success ? "yes" : "no"}`);
+    lines.push(`- Failed steps: ${report.journey.failedSteps}`);
+    lines.push("");
+    for (const item of report.journey.results) {
+      const status = item.success ? "PASS" : "FAIL";
+      const suffix = item.label ? ` (${item.label})` : "";
+      lines.push(`- Step ${item.step} ${status}: ${item.action}${suffix}`);
+      if (item.error) {
+        lines.push(`  ${item.error}`);
+      }
     }
     lines.push("");
   }
@@ -849,6 +1048,7 @@ export async function auditPageInContext(context, options) {
     tabLimit = 20,
     timeout = 45000,
     wait = 1000,
+    journey = null,
     reflowCheck = false,
     reflowWidths = [320, 768],
     screenshots = false,
@@ -900,6 +1100,11 @@ export async function auditPageInContext(context, options) {
       reflow,
       semantics,
     };
+
+    if (journey) {
+      report.journey = await runJourney(page, journey);
+      report.summary.journeyFailureCount = report.journey.failedSteps;
+    }
 
     if (screenshots && assetDir) {
       report.evidence = await captureEvidence(page, axeRaw.violations, keyboard, assetDir, screenshotLimit);

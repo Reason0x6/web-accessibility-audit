@@ -1,0 +1,32 @@
+{
+  "name": "Keyboard route from home to TP-7",
+  "steps": [
+    {
+      "action": "tab_until",
+      "label": "Reach TP-7 link",
+      "text": "OPEN TP-7",
+      "maxTabs": 12
+    },
+    {
+      "action": "press",
+      "label": "Open TP-7 by keyboard",
+      "key": "Enter",
+      "wait": 300
+    },
+    {
+      "action": "expect_url_includes",
+      "label": "Route changed",
+      "value": "/tp-7-youtube"
+    },
+    {
+      "action": "expect_visible",
+      "label": "TP-7 input visible",
+      "selector": "input.device-input"
+    },
+    {
+      "action": "expect_visible",
+      "label": "Transport slider visible",
+      "selector": "input[step=\"0.1\"]"
+    }
+  ]
+}

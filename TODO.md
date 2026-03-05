@@ -5,6 +5,7 @@ Rank items by expected impact on real accessibility outcomes, signal quality, an
 ## Ranked Backlog
 
 1. `P1` Keyboard-only journey testing
+Status: Implemented in this iteration.
 Meaningfulness: Highest. Keyboard failures are common, severe, and only partially covered by the current tab-sampling heuristic.
 Implementation direction: Add scripted journey support for menus, dialogs, forms, tabs, accordions, and other interactive flows.
 

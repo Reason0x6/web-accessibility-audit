@@ -25,6 +25,7 @@ The script writes reports into `reports/` by default and prints the output paths
 1. Confirm the target page is reachable without credentials. If it is not, stop and ask for a reproducible public URL or a session setup plan.
 2. Install dependencies if `node_modules/` is missing.
 3. Run `npm run audit -- --url <page-url>`. By default this runs the full automated audit profile, including reflow checks and screenshot evidence capture.
+Use `--journey-file <json>` when the user needs a scripted keyboard flow or page-transition check.
 4. Use `npm run crawl -- --url <seed-url> --max-pages <n>` when the user needs repeated-template coverage across several same-origin pages.
 5. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
 6. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
@@ -45,6 +46,7 @@ Supported options:
 - `--tab-limit`: Maximum number of `Tab` presses to sample for keyboard traversal.
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
+- `--journey-file`: Audit mode only. Load a JSON keyboard journey with actions and assertions.
 - `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
 - `--skip-reflow-check`: Skip narrow-width reflow checks. Reflow checks run by default.
 - `--reflow-widths`: Comma-separated viewport widths used by the reflow check.
@@ -61,6 +63,23 @@ Supported options:
 - Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
 - Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.
 - Reflow checks at narrow widths to flag horizontal scrolling and likely clipped content.
+- Scripted keyboard journeys with route or visibility assertions when a `--journey-file` is supplied.
+
+## Journey Files
+
+Use a JSON file with a `steps` array. Supported actions:
+
+- `tab`: Move keyboard focus with `Tab` or `Shift+Tab`.
+- `tab_until`: Tab until the focused element matches a `selector`, `text`, or `href`.
+- `press`: Press a key such as `Enter`, `Space`, or `ArrowRight`.
+- `type`: Type text into the currently focused control.
+- `wait`: Pause for a fixed number of milliseconds.
+- `expect_url_includes`: Assert the current URL contains a string.
+- `expect_visible`: Assert a selector becomes visible.
+- `expect_focused`: Assert the currently focused element matches a `selector`, `text`, or `href`.
+- `expect_text`: Assert a selector's text includes a string.
+
+Example: [keyboard-home-to-tp7.json](./scripts/examples/keyboard-home-to-tp7.json)
 
 ## Interpretation Rules
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -66,6 +67,12 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--journey-file") {
+      args.journeyFile = argv[index + 1];
+      index += 1;
+      continue;
+    }
+
     if (token === "--reflow-check") {
       args.reflowCheck = true;
       continue;
@@ -111,7 +118,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--journey-file path/to/journey.json] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",
@@ -158,6 +165,7 @@ async function main() {
   const outBase =
     args.out ||
     path.join(process.cwd(), "reports", `${slugifyUrl(args.url)}-${timestampForFile(testedAt)}`);
+  const journey = args.journeyFile ? JSON.parse(await fs.readFile(args.journeyFile, "utf8")) : null;
 
   const resources = await createBrowserContext();
 
@@ -167,6 +175,7 @@ async function main() {
       tabLimit: args.tabLimit,
       timeout: args.timeout,
       wait: args.wait,
+      journey,
       reflowCheck: args.reflowCheck,
       reflowWidths: args.reflowWidths,
       screenshots: args.screenshots,
