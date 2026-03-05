@@ -1,0 +1,12 @@
+{
+  "name": "web-accessibility-audit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audit": "node scripts/audit-url.mjs"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "playwright": "^1.58.2"
+  }
+}

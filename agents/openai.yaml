@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web Accessibility Audit"
+  short_description: "Audit a live page for WCAG issues"
+  default_prompt: "Use $web-accessibility-audit to audit https://example.com for keyboard, contrast, and screen-reader issues."
