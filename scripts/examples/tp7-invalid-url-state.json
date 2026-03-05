@@ -1,0 +1,46 @@
+{
+  "name": "TP-7 invalid URL state change",
+  "steps": [
+    {
+      "action": "remember",
+      "label": "Capture initial status",
+      "name": "tp7Status",
+      "selector": "app-device-display[label=\"Status\"] p.text-sm"
+    },
+    {
+      "action": "fill",
+      "label": "Enter invalid URL",
+      "selector": "input.device-input",
+      "text": "not a url"
+    },
+    {
+      "action": "expect_value",
+      "label": "Input updated",
+      "selector": "input.device-input",
+      "value": "not a url"
+    },
+    {
+      "action": "click",
+      "label": "Trigger source load",
+      "selector": "button.segment-button"
+    },
+    {
+      "action": "expect_changed",
+      "label": "Status text changed",
+      "name": "tp7Status",
+      "selector": "app-device-display[label=\"Status\"] p.text-sm"
+    },
+    {
+      "action": "expect_text",
+      "label": "Status shows source error",
+      "selector": "app-device-display[label=\"Status\"] p.text-sm",
+      "value": "Source error"
+    },
+    {
+      "action": "expect_text",
+      "label": "Validation message rendered",
+      "selector": "form",
+      "value": "Paste a valid YouTube"
+    }
+  ]
+}

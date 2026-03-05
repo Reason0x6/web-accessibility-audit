@@ -540,6 +540,39 @@ async function runJourney(page, journey) {
 
   const results = [];
   let failures = 0;
+  const snapshots = new Map();
+
+  async function readState(step) {
+    const source = step.source || "text";
+
+    if (source === "url") {
+      return page.url();
+    }
+
+    if (source === "focus") {
+      return JSON.stringify(await describeFocusedElement(page));
+    }
+
+    if (!step.selector) {
+      throw new Error(`${source} state reads require a selector.`);
+    }
+
+    const locator = page.locator(step.selector).first();
+    if (source === "text") {
+      return (await locator.innerText({ timeout: step.timeout ?? 5000 })).trim();
+    }
+    if (source === "value") {
+      return await locator.inputValue({ timeout: step.timeout ?? 5000 });
+    }
+    if (source === "attribute") {
+      if (!step.attribute) {
+        throw new Error("attribute state reads require an attribute name.");
+      }
+      return await locator.getAttribute(step.attribute);
+    }
+
+    throw new Error(`Unsupported state source: ${source}`);
+  }
 
   for (let index = 0; index < journey.steps.length; index += 1) {
     const step = journey.steps[index];
@@ -588,6 +621,24 @@ async function runJourney(page, journey) {
           result.focus = await describeFocusedElement(page);
           break;
         }
+        case "click": {
+          if (!step.selector) {
+            throw new Error("click action requires a selector.");
+          }
+          await page.locator(step.selector).first().click({ timeout: step.timeout ?? 5000 });
+          await page.waitForTimeout(step.wait ?? 150);
+          result.selector = step.selector;
+          break;
+        }
+        case "fill": {
+          if (!step.selector || typeof step.text !== "string") {
+            throw new Error("fill action requires selector and text.");
+          }
+          await page.locator(step.selector).first().fill(step.text, { timeout: step.timeout ?? 5000 });
+          await page.waitForTimeout(step.wait ?? 75);
+          result.selector = step.selector;
+          break;
+        }
         case "type": {
           if (typeof step.text !== "string") {
             throw new Error("type action requires text.");
@@ -595,6 +646,20 @@ async function runJourney(page, journey) {
           await page.keyboard.type(step.text, { delay: step.delay ?? 20 });
           await page.waitForTimeout(step.wait ?? 75);
           result.focus = await describeFocusedElement(page);
+          break;
+        }
+        case "remember": {
+          if (!step.name) {
+            throw new Error("remember action requires a name.");
+          }
+          const value = await readState(step);
+          snapshots.set(step.name, {
+            source: step.source || "text",
+            selector: step.selector || null,
+            attribute: step.attribute || null,
+            value,
+          });
+          result.name = step.name;
           break;
         }
         case "wait": {
@@ -631,6 +696,57 @@ async function runJourney(page, journey) {
           const text = await page.locator(step.selector).first().innerText({ timeout: step.timeout ?? 5000 });
           if (!text.toLowerCase().includes(step.value.toLowerCase())) {
             throw new Error(`Text for ${step.selector} did not include "${step.value}".`);
+          }
+          result.selector = step.selector;
+          break;
+        }
+        case "expect_changed": {
+          if (!step.name) {
+            throw new Error("expect_changed action requires a snapshot name.");
+          }
+          const snapshot = snapshots.get(step.name);
+          if (!snapshot) {
+            throw new Error(`No snapshot stored as "${step.name}".`);
+          }
+
+          const currentValue = await readState({
+            selector: step.selector || snapshot.selector,
+            source: step.source || snapshot.source,
+            attribute: step.attribute || snapshot.attribute,
+            timeout: step.timeout,
+          });
+
+          if (currentValue === snapshot.value) {
+            throw new Error(`State "${step.name}" did not change.`);
+          }
+
+          result.name = step.name;
+          break;
+        }
+        case "expect_attribute": {
+          if (!step.selector || !step.attribute) {
+            throw new Error("expect_attribute action requires selector and attribute.");
+          }
+          const value = await page.locator(step.selector).first().getAttribute(step.attribute);
+          if (typeof step.value === "string" && value !== step.value) {
+            throw new Error(`Attribute ${step.attribute} for ${step.selector} was "${value}" not "${step.value}".`);
+          }
+          if (typeof step.includes === "string" && !(value || "").includes(step.includes)) {
+            throw new Error(`Attribute ${step.attribute} for ${step.selector} did not include "${step.includes}".`);
+          }
+          result.selector = step.selector;
+          break;
+        }
+        case "expect_value": {
+          if (!step.selector) {
+            throw new Error("expect_value action requires a selector.");
+          }
+          const value = await page.locator(step.selector).first().inputValue({ timeout: step.timeout ?? 5000 });
+          if (typeof step.value === "string" && value !== step.value) {
+            throw new Error(`Value for ${step.selector} was "${value}" not "${step.value}".`);
+          }
+          if (typeof step.includes === "string" && !value.includes(step.includes)) {
+            throw new Error(`Value for ${step.selector} did not include "${step.includes}".`);
           }
           result.selector = step.selector;
           break;

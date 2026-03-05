@@ -30,6 +30,7 @@ Meaningfulness: Very high. Responsive breakage at 200 percent and 400 percent is
 Implementation direction: Audit at enlarged scale and narrow widths for overflow, clipping, and horizontal scroll.
 
 6. `P1` State-change testing
+Status: Implemented in this iteration.
 Meaningfulness: Very high. Focus management and announcements often fail during SPA navigation, dialogs, and live updates.
 Implementation direction: Add a journey mode with explicit actions and assertions for focus and live regions.
 

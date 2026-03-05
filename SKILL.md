@@ -72,14 +72,21 @@ Use a JSON file with a `steps` array. Supported actions:
 - `tab`: Move keyboard focus with `Tab` or `Shift+Tab`.
 - `tab_until`: Tab until the focused element matches a `selector`, `text`, or `href`.
 - `press`: Press a key such as `Enter`, `Space`, or `ArrowRight`.
+- `click`: Activate a selector directly when keyboard-only interaction is not the thing under test.
+- `fill`: Replace the value of an input-like control.
 - `type`: Type text into the currently focused control.
+- `remember`: Snapshot text, value, attribute, URL, or focus for later comparison.
 - `wait`: Pause for a fixed number of milliseconds.
 - `expect_url_includes`: Assert the current URL contains a string.
 - `expect_visible`: Assert a selector becomes visible.
 - `expect_focused`: Assert the currently focused element matches a `selector`, `text`, or `href`.
+- `expect_changed`: Assert a previously remembered state no longer matches.
+- `expect_attribute`: Assert an attribute equals or includes a value.
+- `expect_value`: Assert an input value equals or includes a value.
 - `expect_text`: Assert a selector's text includes a string.
 
 Example: [keyboard-home-to-tp7.json](./scripts/examples/keyboard-home-to-tp7.json)
+State-change example: [tp7-invalid-url-state.json](./scripts/examples/tp7-invalid-url-state.json)
 
 ## Interpretation Rules
 
