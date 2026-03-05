@@ -19,6 +19,7 @@ Meaningfulness: Very high. Screenshots make results actionable and reduce time t
 Implementation direction: Capture page-level and element-level evidence for axe violations and key keyboard issues.
 
 4. `P1` WCAG-mapped reporting by severity
+Status: Implemented in this iteration.
 Meaningfulness: Very high. Teams need findings grouped by severity and mapped to standards for triage and compliance.
 Implementation direction: Add summarized WCAG tags, severity buckets, and remediation-ready report sections.
 

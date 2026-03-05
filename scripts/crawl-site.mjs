@@ -184,6 +184,14 @@ async function collectSameOriginLinks(page, origin) {
 
 function buildAggregateSummary(pages) {
   const ruleCounts = new Map();
+  const severityCounts = {
+    critical: 0,
+    serious: 0,
+    moderate: 0,
+    minor: 0,
+    unknown: 0,
+  };
+  const wcagCounts = new Map();
   let totalAxeViolations = 0;
   let pagesWithKeyboardWarnings = 0;
   let pagesWithScreenReaderWarnings = 0;
@@ -197,6 +205,14 @@ function buildAggregateSummary(pages) {
       pagesWithScreenReaderWarnings += 1;
     }
 
+    for (const [severity, count] of Object.entries(page.summary.axeImpactCounts)) {
+      severityCounts[severity] = (severityCounts[severity] || 0) + count;
+    }
+
+    for (const item of page.summary.wcagSummary) {
+      wcagCounts.set(item.tag, (wcagCounts.get(item.tag) || 0) + item.count);
+    }
+
     for (const violation of page.axe.violations) {
       ruleCounts.set(violation.id, (ruleCounts.get(violation.id) || 0) + violation.affectedNodes);
     }
@@ -207,9 +223,16 @@ function buildAggregateSummary(pages) {
     .sort((left, right) => right.count - left.count || left.id.localeCompare(right.id))
     .slice(0, 10);
 
+  const wcagSummary = Array.from(wcagCounts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag))
+    .slice(0, 10);
+
   return {
     pagesAudited: pages.length,
     totalAxeViolations,
+    severityCounts,
+    wcagSummary,
     pagesWithKeyboardWarnings,
     pagesWithScreenReaderWarnings,
     topViolationRules,

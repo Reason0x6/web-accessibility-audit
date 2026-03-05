@@ -52,6 +52,46 @@ function simplifyAxeResults(items) {
   }));
 }
 
+function wcagTagsFor(tags) {
+  return tags.filter((tag) => /^wcag/i.test(tag)).sort();
+}
+
+function buildSeverityBuckets(violations) {
+  const buckets = {
+    critical: [],
+    serious: [],
+    moderate: [],
+    minor: [],
+    unknown: [],
+  };
+
+  for (const violation of violations) {
+    const bucket = buckets[violation.impact] || buckets.unknown;
+    bucket.push({
+      id: violation.id,
+      affectedNodes: violation.affectedNodes,
+      wcagTags: wcagTagsFor(violation.tags),
+      help: violation.help,
+    });
+  }
+
+  return buckets;
+}
+
+function buildWcagSummary(violations) {
+  const counts = new Map();
+
+  for (const violation of violations) {
+    for (const tag of wcagTagsFor(violation.tags)) {
+      counts.set(tag, (counts.get(tag) || 0) + violation.affectedNodes);
+    }
+  }
+
+  return Array.from(counts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag));
+}
+
 function sanitizeFilePart(value) {
   return value.replace(/[^a-z0-9-_]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "item";
 }
@@ -442,6 +482,7 @@ async function collectSemanticSignals(page) {
 
 function buildSummary(axeViolations, keyboard, semantics) {
   const impactCounts = summarizeImpactCounts(axeViolations);
+  const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
   const screenReaderWarnings = [];
 
@@ -482,6 +523,8 @@ function buildSummary(axeViolations, keyboard, semantics) {
   return {
     axeViolationCount: axeViolations.length,
     axeImpactCounts: impactCounts,
+    severityBuckets: buildSeverityBuckets(simplifiedViolations),
+    wcagSummary: buildWcagSummary(simplifiedViolations),
     contrastViolationCount: contrastViolations.length,
     keyboardWarningCount: keyboard.warnings.length,
     screenReaderWarningCount: screenReaderWarnings.length,
@@ -509,6 +552,35 @@ export function renderMarkdown(report) {
     `Critical: ${summary.axeImpactCounts.critical}, Serious: ${summary.axeImpactCounts.serious}, Moderate: ${summary.axeImpactCounts.moderate}, Minor: ${summary.axeImpactCounts.minor}, Unknown: ${summary.axeImpactCounts.unknown}`,
   );
   lines.push("");
+
+  lines.push("## Severity Buckets");
+  lines.push("");
+  for (const bucket of ["critical", "serious", "moderate", "minor", "unknown"]) {
+    const items = summary.severityBuckets[bucket];
+    if (items.length === 0) {
+      continue;
+    }
+
+    lines.push(`### ${bucket}`);
+    lines.push("");
+    for (const item of items) {
+      const wcagText = item.wcagTags.length > 0 ? ` | ${item.wcagTags.join(", ")}` : "";
+      lines.push(`- ${item.id}: ${item.affectedNodes} node(s)${wcagText}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## WCAG Mapping");
+  lines.push("");
+  if (summary.wcagSummary.length === 0) {
+    lines.push("No WCAG tags were attached to the detected violations.");
+    lines.push("");
+  } else {
+    for (const item of summary.wcagSummary) {
+      lines.push(`- ${item.tag}: ${item.count}`);
+    }
+    lines.push("");
+  }
 
   if (axe.violations.length === 0) {
     lines.push("No axe violations were detected on the sampled page state.");
@@ -607,6 +679,25 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
   lines.push("");
+  lines.push("## Severity Totals");
+  lines.push("");
+  lines.push(
+    `Critical: ${summary.severityCounts.critical}, Serious: ${summary.severityCounts.serious}, Moderate: ${summary.severityCounts.moderate}, Minor: ${summary.severityCounts.minor}, Unknown: ${summary.severityCounts.unknown}`,
+  );
+  lines.push("");
+  lines.push("## WCAG Mapping");
+  lines.push("");
+
+  if (summary.wcagSummary.length === 0) {
+    lines.push("No WCAG tags were attached to the detected violations.");
+    lines.push("");
+  } else {
+    for (const item of summary.wcagSummary) {
+      lines.push(`- ${item.tag}: ${item.count}`);
+    }
+    lines.push("");
+  }
+
   lines.push("## Top Violation Rules");
   lines.push("");
 

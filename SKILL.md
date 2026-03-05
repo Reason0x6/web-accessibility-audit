@@ -57,6 +57,7 @@ Supported options:
 - Screen-reader proxy checks such as missing landmarks, heading skips, unlabeled controls, unnamed buttons or links, missing `lang`, and missing `alt`.
 - Contrast findings from axe (`color-contrast`).
 - Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
+- Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.
 
 ## Interpretation Rules
 
