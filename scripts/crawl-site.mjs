@@ -19,6 +19,8 @@ function parseArgs(argv) {
     tabLimit: 20,
     timeout: 45000,
     wait: 1000,
+    reflowCheck: false,
+    reflowWidths: [320, 768],
     screenshots: false,
     screenshotLimit: 10,
   };
@@ -72,6 +74,20 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--reflow-check") {
+      args.reflowCheck = true;
+      continue;
+    }
+
+    if (token === "--reflow-widths") {
+      args.reflowWidths = argv[index + 1]
+        .split(",")
+        .map((value) => Number.parseInt(value.trim(), 10))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      index += 1;
+      continue;
+    }
+
     if (token === "--screenshots") {
       args.screenshots = true;
       continue;
@@ -93,7 +109,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]",
+      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run crawl -- --url https://www.wsp.com --max-pages 5",
@@ -194,12 +210,16 @@ function buildAggregateSummary(pages) {
   const wcagCounts = new Map();
   let totalAxeViolations = 0;
   let pagesWithKeyboardWarnings = 0;
+  let pagesWithReflowWarnings = 0;
   let pagesWithScreenReaderWarnings = 0;
 
   for (const page of pages) {
     totalAxeViolations += page.summary.axeViolationCount;
     if (page.summary.keyboardWarningCount > 0) {
       pagesWithKeyboardWarnings += 1;
+    }
+    if (page.summary.reflowWarningCount > 0) {
+      pagesWithReflowWarnings += 1;
     }
     if (page.summary.screenReaderWarningCount > 0) {
       pagesWithScreenReaderWarnings += 1;
@@ -234,6 +254,7 @@ function buildAggregateSummary(pages) {
     severityCounts,
     wcagSummary,
     pagesWithKeyboardWarnings,
+    pagesWithReflowWarnings,
     pagesWithScreenReaderWarnings,
     topViolationRules,
   };
@@ -258,6 +279,8 @@ async function crawlSite(context, options, outBase) {
       tabLimit: options.tabLimit,
       timeout: options.timeout,
       wait: options.wait,
+      reflowCheck: options.reflowCheck,
+      reflowWidths: options.reflowWidths,
       screenshots: options.screenshots,
       assetDir: options.screenshots
         ? path.join(`${outBase}-assets`, `${String(reports.length + 1).padStart(2, "0")}-${slugifyUrl(currentUrl)}`)
@@ -325,6 +348,10 @@ async function main() {
 
   if (!Number.isFinite(args.screenshotLimit) || args.screenshotLimit < 1) {
     throw new Error("--screenshot-limit must be a positive integer.");
+  }
+
+  if (args.reflowCheck && args.reflowWidths.length === 0) {
+    throw new Error("--reflow-widths must contain at least one positive width.");
   }
 
   const testedAt = new Date();

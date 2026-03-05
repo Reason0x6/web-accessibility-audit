@@ -34,8 +34,8 @@ The script writes reports into `reports/` by default and prints the output paths
 Run the script with:
 
 ```powershell
-node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]
-node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]
+node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]
 ```
 
 Supported options:
@@ -46,6 +46,8 @@ Supported options:
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
 - `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
+- `--reflow-check`: Run narrow-width reflow checks for horizontal scroll and clipped content.
+- `--reflow-widths`: Comma-separated viewport widths used by the reflow check.
 - `--screenshots`: Save a full-page screenshot plus issue-focused evidence images.
 - `--screenshot-limit`: Cap how many issue-focused screenshots are captured.
 
@@ -58,6 +60,7 @@ Supported options:
 - Contrast findings from axe (`color-contrast`).
 - Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
 - Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.
+- Reflow checks at narrow widths to flag horizontal scrolling and likely clipped content.
 
 ## Interpretation Rules
 

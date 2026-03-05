@@ -17,6 +17,8 @@ function parseArgs(argv) {
     tabLimit: 20,
     timeout: 45000,
     wait: 1000,
+    reflowCheck: false,
+    reflowWidths: [320, 768],
     screenshots: false,
     screenshotLimit: 10,
   };
@@ -64,6 +66,20 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--reflow-check") {
+      args.reflowCheck = true;
+      continue;
+    }
+
+    if (token === "--reflow-widths") {
+      args.reflowWidths = argv[index + 1]
+        .split(",")
+        .map((value) => Number.parseInt(value.trim(), 10))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      index += 1;
+      continue;
+    }
+
     if (token === "--screenshots") {
       args.screenshots = true;
       continue;
@@ -85,7 +101,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",
@@ -124,6 +140,10 @@ async function main() {
     throw new Error("--screenshot-limit must be a positive integer.");
   }
 
+  if (args.reflowCheck && args.reflowWidths.length === 0) {
+    throw new Error("--reflow-widths must contain at least one positive width.");
+  }
+
   const testedAt = new Date();
   const outBase =
     args.out ||
@@ -137,6 +157,8 @@ async function main() {
       tabLimit: args.tabLimit,
       timeout: args.timeout,
       wait: args.wait,
+      reflowCheck: args.reflowCheck,
+      reflowWidths: args.reflowWidths,
       screenshots: args.screenshots,
       assetDir: args.screenshots ? `${outBase}-assets` : null,
       screenshotLimit: args.screenshotLimit,

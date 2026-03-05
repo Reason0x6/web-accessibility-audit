@@ -480,7 +480,83 @@ async function collectSemanticSignals(page) {
   });
 }
 
-function buildSummary(axeViolations, keyboard, semantics) {
+async function collectReflowChecks(page, widths) {
+  const originalViewport = page.viewportSize() || { width: 1440, height: 960 };
+  const checks = [];
+
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: originalViewport.height });
+    await page.waitForTimeout(300);
+
+    const check = await page.evaluate(() => {
+      function selectorFor(element) {
+        if (element.id) {
+          return `#${element.id}`;
+        }
+
+        return element.tagName.toLowerCase();
+      }
+
+      function describe(element) {
+        return {
+          selector: selectorFor(element),
+          text: (element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+        };
+      }
+
+      const overflowingElements = Array.from(document.querySelectorAll("body *"))
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.right > window.innerWidth + 1;
+        })
+        .slice(0, 10)
+        .map(describe);
+
+      const clippedTextElements = Array.from(document.querySelectorAll("body *"))
+        .filter((element) => {
+          const style = window.getComputedStyle(element);
+          const text = (element.textContent || "").trim();
+          return (
+            text.length > 20 &&
+            element.scrollWidth > element.clientWidth + 1 &&
+            ["hidden", "clip"].includes(style.overflowX)
+          );
+        })
+        .slice(0, 10)
+        .map(describe);
+
+      const horizontalScrollDetected = document.documentElement.scrollWidth > window.innerWidth + 1;
+      const warnings = [];
+      if (horizontalScrollDetected) {
+        warnings.push("Page requires horizontal scrolling at this width.");
+      }
+      if (overflowingElements.length > 0) {
+        warnings.push(`Detected ${overflowingElements.length} overflowing element sample(s).`);
+      }
+      if (clippedTextElements.length > 0) {
+        warnings.push(`Detected ${clippedTextElements.length} clipped-text sample(s).`);
+      }
+
+      return {
+        width: window.innerWidth,
+        horizontalScrollDetected,
+        overflowingElements,
+        clippedTextElements,
+        warningCount: warnings.length,
+        warnings,
+      };
+    });
+
+    checks.push(check);
+  }
+
+  await page.setViewportSize(originalViewport);
+  await page.waitForTimeout(100);
+
+  return checks;
+}
+
+function buildSummary(axeViolations, keyboard, semantics, reflowChecks = []) {
   const impactCounts = summarizeImpactCounts(axeViolations);
   const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
@@ -527,6 +603,7 @@ function buildSummary(axeViolations, keyboard, semantics) {
     wcagSummary: buildWcagSummary(simplifiedViolations),
     contrastViolationCount: contrastViolations.length,
     keyboardWarningCount: keyboard.warnings.length,
+    reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
     screenReaderWarningCount: screenReaderWarnings.length,
     screenReaderWarnings,
   };
@@ -544,6 +621,7 @@ export function renderMarkdown(report) {
   lines.push(`- Axe violations: ${summary.axeViolationCount}`);
   lines.push(`- Contrast violations: ${summary.contrastViolationCount}`);
   lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
+  lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
   lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
   lines.push("");
   lines.push("## Axe Summary");
@@ -620,6 +698,25 @@ export function renderMarkdown(report) {
     lines.push("");
   }
 
+  lines.push("## Reflow Checks");
+  lines.push("");
+  if (!report.reflow || report.reflow.length === 0) {
+    lines.push("No reflow checks were requested for this audit.");
+    lines.push("");
+  } else {
+    for (const check of report.reflow) {
+      lines.push(`### width ${check.width}px`);
+      lines.push("");
+      lines.push(`- Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}`);
+      lines.push(`- Overflow sample count: ${check.overflowingElements.length}`);
+      lines.push(`- Clipped text sample count: ${check.clippedTextElements.length}`);
+      for (const warning of check.warnings) {
+        lines.push(`- ${warning}`);
+      }
+      lines.push("");
+    }
+  }
+
   lines.push("## Screen Reader Proxies");
   lines.push("");
   lines.push(`- html[lang]: ${semantics.page.lang || "(missing)"}`);
@@ -677,6 +774,7 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Tested at: ${metadata.testedAt}`);
   lines.push(`- Total axe violations: ${summary.totalAxeViolations}`);
   lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
+  lines.push(`- Pages with reflow warnings: ${summary.pagesWithReflowWarnings}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
   lines.push("");
   lines.push("## Severity Totals");
@@ -751,6 +849,8 @@ export async function auditPageInContext(context, options) {
     tabLimit = 20,
     timeout = 45000,
     wait = 1000,
+    reflowCheck = false,
+    reflowWidths = [320, 768],
     screenshots = false,
     assetDir = null,
     screenshotLimit = 10,
@@ -780,7 +880,8 @@ export async function auditPageInContext(context, options) {
 
     const keyboard = await runKeyboardAudit(page, tabLimit);
     const semantics = await collectSemanticSignals(page);
-    const summary = buildSummary(axeRaw.violations, keyboard, semantics);
+    const reflow = reflowCheck ? await collectReflowChecks(page, reflowWidths) : [];
+    const summary = buildSummary(axeRaw.violations, keyboard, semantics, reflow);
     const report = {
       metadata: {
         url: page.url(),
@@ -796,6 +897,7 @@ export async function auditPageInContext(context, options) {
         inapplicable: axeRaw.inapplicable.length,
       },
       keyboard,
+      reflow,
       semantics,
     };
 

@@ -24,6 +24,7 @@ Meaningfulness: Very high. Teams need findings grouped by severity and mapped to
 Implementation direction: Add summarized WCAG tags, severity buckets, and remediation-ready report sections.
 
 5. `P1` Zoom and reflow checks
+Status: Implemented in this iteration.
 Meaningfulness: Very high. Responsive breakage at 200 percent and 400 percent is common and often severe.
 Implementation direction: Audit at enlarged scale and narrow widths for overflow, clipping, and horizontal scroll.
 
