@@ -755,6 +755,179 @@ async function collectFormSignals(page) {
   });
 }
 
+async function collectNonTextContrastSignals(page) {
+  return page.evaluate(() => {
+    const parser = document.createElement("span");
+    parser.style.display = "none";
+    document.body.appendChild(parser);
+
+    function selectorFor(element) {
+      if (element.id) {
+        return `#${element.id}`;
+      }
+
+      const name = element.getAttribute("name");
+      if (name) {
+        return `${element.tagName.toLowerCase()}[name="${name}"]`;
+      }
+
+      return element.tagName.toLowerCase();
+    }
+
+    function textFor(element) {
+      return (element.innerText || element.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+    }
+
+    function parseColor(value) {
+      if (!value || value === "transparent") {
+        return null;
+      }
+
+      parser.style.color = "";
+      parser.style.color = value;
+      const normalized = getComputedStyle(parser).color;
+      const match = normalized.match(/rgba?\(([^)]+)\)/i);
+      if (!match) {
+        return null;
+      }
+
+      const parts = match[1].split(",").map((part) => Number.parseFloat(part.trim()));
+      const [r, g, b, a = 1] = parts;
+      return { r, g, b, a };
+    }
+
+    function blend(foreground, background) {
+      const alpha = foreground.a ?? 1;
+      return {
+        r: foreground.r * alpha + background.r * (1 - alpha),
+        g: foreground.g * alpha + background.g * (1 - alpha),
+        b: foreground.b * alpha + background.b * (1 - alpha),
+        a: 1,
+      };
+    }
+
+    function luminance(color) {
+      const convert = (value) => {
+        const channel = value / 255;
+        return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      };
+
+      const red = convert(color.r);
+      const green = convert(color.g);
+      const blue = convert(color.b);
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    }
+
+    function contrastRatio(left, right) {
+      const first = luminance(left);
+      const second = luminance(right);
+      const [lighter, darker] = first > second ? [first, second] : [second, first];
+      return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    function effectiveBackground(element, includeSelf) {
+      const stack = [];
+      let current = includeSelf ? element : element.parentElement;
+
+      while (current && current instanceof Element) {
+        const background = parseColor(getComputedStyle(current).backgroundColor);
+        if (background && background.a > 0) {
+          stack.push(background);
+        }
+        current = current.parentElement;
+      }
+
+      let color = { r: 255, g: 255, b: 255, a: 1 };
+      for (const background of stack.reverse()) {
+        color = blend(background, color);
+      }
+
+      return color;
+    }
+
+    function describeElement(element, extra = {}) {
+      return {
+        selector: selectorFor(element),
+        text: textFor(element),
+        ...extra,
+      };
+    }
+
+    const candidates = Array.from(
+      document.querySelectorAll(
+        'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="link"]',
+      ),
+    );
+
+    const lowContrastBoundaries = [];
+    const lowContrastIcons = [];
+
+    for (const element of candidates) {
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 24 || rect.height < 24) {
+        continue;
+      }
+
+      const style = getComputedStyle(element);
+      if (style.visibility === "hidden" || style.display === "none" || Number.parseFloat(style.opacity || "1") === 0) {
+        continue;
+      }
+
+      const surroundingBackground = effectiveBackground(element, false);
+      const componentBackground = effectiveBackground(element, true);
+      const foregroundColor = parseColor(style.color);
+      const borderColor = parseColor(style.borderColor);
+      const borderWidth = Math.max(
+        Number.parseFloat(style.borderTopWidth || "0"),
+        Number.parseFloat(style.borderRightWidth || "0"),
+        Number.parseFloat(style.borderBottomWidth || "0"),
+        Number.parseFloat(style.borderLeftWidth || "0"),
+      );
+
+      const backgroundContrast = contrastRatio(componentBackground, surroundingBackground);
+      const borderContrast =
+        borderColor && borderWidth > 0 && !["none", "hidden"].includes(style.borderStyle)
+          ? contrastRatio(blend(borderColor, surroundingBackground), surroundingBackground)
+          : 1;
+      const boundaryContrast = Math.max(backgroundContrast, borderContrast);
+
+      if (boundaryContrast < 3) {
+        lowContrastBoundaries.push(
+          describeElement(element, {
+            contrastRatio: Number.parseFloat(boundaryContrast.toFixed(2)),
+          }),
+        );
+      }
+
+      const isIconLike = Boolean(element.querySelector("svg")) || textFor(element).length <= 2;
+      if (isIconLike && foregroundColor) {
+        const iconContrast = contrastRatio(blend(foregroundColor, componentBackground), componentBackground);
+        if (iconContrast < 3) {
+          lowContrastIcons.push(
+            describeElement(element, {
+              contrastRatio: Number.parseFloat(iconContrast.toFixed(2)),
+            }),
+          );
+        }
+      }
+    }
+
+    parser.remove();
+
+    return {
+      lowContrastBoundaries: lowContrastBoundaries.slice(0, 10),
+      lowContrastIcons: lowContrastIcons.slice(0, 10),
+      counts: {
+        lowContrastBoundaries: lowContrastBoundaries.length,
+        lowContrastIcons: lowContrastIcons.length,
+      },
+    };
+  });
+}
+
 async function describeFocusedElement(page) {
   return page.evaluate(() => {
     const active = document.activeElement;
@@ -1126,12 +1299,13 @@ async function collectReflowChecks(page, widths) {
   return checks;
 }
 
-function buildSummary(axeViolations, keyboard, semantics, form, reflowChecks = []) {
+function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast, reflowChecks = []) {
   const impactCounts = summarizeImpactCounts(axeViolations);
   const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
   const screenReaderWarnings = [];
   const formWarnings = [];
+  const nonTextContrastWarnings = [];
 
   if (!semantics.page.lang) {
     screenReaderWarnings.push("The page is missing a root html[lang] attribute.");
@@ -1189,6 +1363,18 @@ function buildSummary(axeViolations, keyboard, semantics, form, reflowChecks = [
     formWarnings.push(`Detected ${form.counts.unassociatedErrorMessages} validation message(s) not tied to a field via aria-describedby or aria-errormessage.`);
   }
 
+  if (nonTextContrast.counts.lowContrastBoundaries > 0) {
+    nonTextContrastWarnings.push(
+      `Detected ${nonTextContrast.counts.lowContrastBoundaries} interactive component boundary candidate(s) below 3:1 contrast.`,
+    );
+  }
+
+  if (nonTextContrast.counts.lowContrastIcons > 0) {
+    nonTextContrastWarnings.push(
+      `Detected ${nonTextContrast.counts.lowContrastIcons} icon-like control candidate(s) below 3:1 contrast.`,
+    );
+  }
+
   return {
     axeViolationCount: axeViolations.length,
     axeImpactCounts: impactCounts,
@@ -1196,10 +1382,13 @@ function buildSummary(axeViolations, keyboard, semantics, form, reflowChecks = [
     wcagSummary: buildWcagSummary(simplifiedViolations),
     contrastViolationCount: contrastViolations.length,
     formWarningCount: formWarnings.length,
+    nonTextContrastWarningCount:
+      nonTextContrast.counts.lowContrastBoundaries + nonTextContrast.counts.lowContrastIcons,
     journeyFailureCount: 0,
     keyboardWarningCount: keyboard.warnings.length,
     reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
     formWarnings,
+    nonTextContrastWarnings,
     screenReaderWarningCount: screenReaderWarnings.length,
     screenReaderWarnings,
   };
@@ -1207,7 +1396,7 @@ function buildSummary(axeViolations, keyboard, semantics, form, reflowChecks = [
 
 export function renderMarkdown(report) {
   const lines = [];
-  const { metadata, summary, keyboard, semantics, form, axe } = report;
+  const { metadata, summary, keyboard, semantics, form, nonTextContrast, axe } = report;
 
   lines.push(`# Accessibility Audit: ${metadata.title || metadata.url}`);
   lines.push("");
@@ -1216,6 +1405,7 @@ export function renderMarkdown(report) {
   lines.push(`- Tested at: ${metadata.testedAt}`);
   lines.push(`- Axe violations: ${summary.axeViolationCount}`);
   lines.push(`- Contrast violations: ${summary.contrastViolationCount}`);
+  lines.push(`- Non-text contrast warnings: ${summary.nonTextContrastWarningCount}`);
   lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
   lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
   lines.push(`- Form warnings: ${summary.formWarningCount}`);
@@ -1391,6 +1581,38 @@ export function renderMarkdown(report) {
     lines.push("");
   }
 
+  lines.push("## Non-Text Contrast");
+  lines.push("");
+  lines.push(`- Low-contrast component boundaries: ${nonTextContrast.counts.lowContrastBoundaries}`);
+  lines.push(`- Low-contrast icon-like controls: ${nonTextContrast.counts.lowContrastIcons}`);
+  lines.push("");
+
+  if (summary.nonTextContrastWarnings.length === 0) {
+    lines.push("No non-text contrast warnings were generated.");
+    lines.push("");
+  } else {
+    for (const warning of summary.nonTextContrastWarnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  const nonTextExamples = [
+    ...nonTextContrast.lowContrastBoundaries.map(
+      (item) => `Component boundary contrast below 3:1 for ${item.selector} (${item.contrastRatio}:1).`,
+    ),
+    ...nonTextContrast.lowContrastIcons.map(
+      (item) => `Icon-like control contrast below 3:1 for ${item.selector} (${item.contrastRatio}:1).`,
+    ),
+  ].slice(0, 10);
+
+  for (const example of nonTextExamples) {
+    lines.push(`- ${example}`);
+  }
+  if (nonTextExamples.length > 0) {
+    lines.push("");
+  }
+
   if (report.evidence) {
     lines.push("## Evidence");
     lines.push("");
@@ -1429,6 +1651,7 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
   lines.push(`- Pages with reflow warnings: ${summary.pagesWithReflowWarnings}`);
   lines.push(`- Pages with form warnings: ${summary.pagesWithFormWarnings}`);
+  lines.push(`- Pages with non-text contrast warnings: ${summary.pagesWithNonTextContrastWarnings}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
   lines.push("");
   lines.push("## Severity Totals");
@@ -1472,6 +1695,7 @@ export function renderAggregateMarkdown(aggregateReport) {
     lines.push(`- Axe violations: ${page.summary.axeViolationCount}`);
     lines.push(`- Keyboard warnings: ${page.summary.keyboardWarningCount}`);
     lines.push(`- Form warnings: ${page.summary.formWarningCount}`);
+    lines.push(`- Non-text contrast warnings: ${page.summary.nonTextContrastWarningCount}`);
     lines.push(`- Screen-reader warnings: ${page.summary.screenReaderWarningCount}`);
     lines.push("");
   }
@@ -1539,7 +1763,8 @@ export async function auditPageInContext(context, options) {
     const reflow = reflowCheck ? await collectReflowChecks(page, reflowWidths) : [];
     const journeyReport = journey ? await runJourney(page, journey) : null;
     const form = await collectFormSignals(page);
-    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, reflow);
+    const nonTextContrast = await collectNonTextContrastSignals(page);
+    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, nonTextContrast, reflow);
     const report = {
       metadata: {
         url: page.url(),
@@ -1558,6 +1783,7 @@ export async function auditPageInContext(context, options) {
       reflow,
       semantics,
       form,
+      nonTextContrast,
     };
 
     if (journeyReport) {

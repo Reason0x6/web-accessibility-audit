@@ -60,6 +60,7 @@ Supported options:
 - Focus visibility heuristics for visited tab stops.
 - Screen-reader proxy checks such as missing landmarks, heading skips, unlabeled controls, unnamed buttons or links, missing `lang`, and missing `alt`.
 - Contrast findings from axe (`color-contrast`).
+- Non-text contrast heuristics for interactive component boundaries and icon-like controls.
 - Form heuristics for missing autocomplete, placeholder-only labels, required-state mismatches, and validation-message wiring.
 - Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
 - Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.

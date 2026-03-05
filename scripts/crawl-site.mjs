@@ -222,6 +222,7 @@ function buildAggregateSummary(pages) {
   let pagesWithKeyboardWarnings = 0;
   let pagesWithReflowWarnings = 0;
   let pagesWithFormWarnings = 0;
+  let pagesWithNonTextContrastWarnings = 0;
   let pagesWithScreenReaderWarnings = 0;
 
   for (const page of pages) {
@@ -234,6 +235,9 @@ function buildAggregateSummary(pages) {
     }
     if (page.summary.formWarningCount > 0) {
       pagesWithFormWarnings += 1;
+    }
+    if (page.summary.nonTextContrastWarningCount > 0) {
+      pagesWithNonTextContrastWarnings += 1;
     }
     if (page.summary.screenReaderWarningCount > 0) {
       pagesWithScreenReaderWarnings += 1;
@@ -270,6 +274,7 @@ function buildAggregateSummary(pages) {
     pagesWithKeyboardWarnings,
     pagesWithReflowWarnings,
     pagesWithFormWarnings,
+    pagesWithNonTextContrastWarnings,
     pagesWithScreenReaderWarnings,
     topViolationRules,
   };

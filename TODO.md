@@ -40,6 +40,7 @@ Meaningfulness: High. Forms are frequent sources of blocking defects.
 Implementation direction: Expand label, required-state, autocomplete, and validation-message detection.
 
 8. `P1` Contrast beyond text
+Status: Implemented in this iteration.
 Meaningfulness: High. Focus indicators, charts, icons, and UI states are easy to miss in text-only contrast checks.
 Implementation direction: Add heuristics for focus-ring presence and non-text contrast candidates.
 
