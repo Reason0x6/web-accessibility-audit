@@ -404,6 +404,8 @@ async function main() {
         {
           jsonReport: `${outBase}.json`,
           markdownReport: `${outBase}.md`,
+          htmlReport: `${outBase}.html`,
+          csvReport: `${outBase}.csv`,
           summary: aggregateReport.summary,
         },
         null,

@@ -50,6 +50,7 @@ Meaningfulness: High, but partially outside browser-only automation.
 Implementation direction: Document a manual test matrix for NVDA, JAWS, VoiceOver, and TalkBack with reproducible steps.
 
 10. `P2` CSV and HTML exports
+Status: Implemented in this iteration.
 Meaningfulness: Medium-high. Reporting format improves adoption and sharing.
 Implementation direction: Export aggregated findings in CSV and publish an HTML summary page.
 

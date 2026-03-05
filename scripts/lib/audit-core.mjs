@@ -96,6 +96,31 @@ function sanitizeFilePart(value) {
   return value.replace(/[^a-z0-9-_]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "item";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeCsv(value) {
+  const normalized = String(value ?? "").replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+  if (/[",]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+  return normalized;
+}
+
+function toCsv(rows) {
+  return `${rows.map((row) => row.map((cell) => escapeCsv(cell)).join(",")).join("\n")}\n`;
+}
+
+function isAggregateReport(report) {
+  return Array.isArray(report?.pages);
+}
+
 async function captureScreenshot(locator, filePath) {
   try {
     await locator.scrollIntoViewIfNeeded().catch(() => {});
@@ -1703,6 +1728,340 @@ export function renderAggregateMarkdown(aggregateReport) {
   return `${lines.join("\n")}\n`;
 }
 
+function collectSinglePageCsvRows(report, context = {}) {
+  const rows = [];
+  const scope = context.scope || "page";
+  const pageUrl = context.url || report.metadata.url;
+  const pageTitle = context.title || report.metadata.title || "";
+
+  for (const violation of report.axe.violations) {
+    for (const node of violation.nodes) {
+      rows.push([
+        scope,
+        pageUrl,
+        pageTitle,
+        "axe",
+        violation.id,
+        violation.impact,
+        violation.affectedNodes,
+        violation.tags.join(" "),
+        node.target.join(" | "),
+        node.failureSummary || node.html || violation.help,
+      ]);
+    }
+  }
+
+  for (const warning of report.keyboard.warnings) {
+    rows.push([scope, pageUrl, pageTitle, "keyboard", "warning", "warning", 1, "", "", warning]);
+  }
+
+  for (const check of report.reflow || []) {
+    for (const warning of check.warnings) {
+      rows.push([scope, pageUrl, pageTitle, "reflow", `width-${check.width}`, "warning", 1, "", "", warning]);
+    }
+  }
+
+  for (const warning of report.summary.screenReaderWarnings) {
+    rows.push([scope, pageUrl, pageTitle, "screen-reader-proxy", "warning", "warning", 1, "", "", warning]);
+  }
+
+  for (const warning of report.summary.formWarnings) {
+    rows.push([scope, pageUrl, pageTitle, "form", "warning", "warning", 1, "", "", warning]);
+  }
+
+  for (const item of report.form?.missingAutocomplete || []) {
+    rows.push([
+      scope,
+      pageUrl,
+      pageTitle,
+      "form",
+      "missing-autocomplete",
+      "warning",
+      1,
+      "",
+      item.selector,
+      `Expected autocomplete token ${item.expected}.`,
+    ]);
+  }
+
+  for (const item of report.form?.placeholderOnlyControls || []) {
+    rows.push([scope, pageUrl, pageTitle, "form", "placeholder-only-label", "warning", 1, "", item.selector, item.placeholder || ""]);
+  }
+
+  for (const item of report.form?.requiredCueOnly || []) {
+    rows.push([scope, pageUrl, pageTitle, "form", "required-cue-only", "warning", 1, "", item.selector, "Visible required cue without programmatic required state."]);
+  }
+
+  for (const item of report.form?.invalidWithoutState || []) {
+    rows.push([scope, pageUrl, pageTitle, "form", "invalid-without-aria-invalid", "warning", 1, "", item.selector, item.message || ""]);
+  }
+
+  for (const item of report.form?.unassociatedErrorMessages || []) {
+    rows.push([scope, pageUrl, pageTitle, "form", "unassociated-error-message", "warning", 1, "", item.selector, item.message || ""]);
+  }
+
+  for (const warning of report.summary.nonTextContrastWarnings) {
+    rows.push([scope, pageUrl, pageTitle, "non-text-contrast", "warning", "warning", 1, "", "", warning]);
+  }
+
+  for (const item of report.nonTextContrast?.lowContrastBoundaries || []) {
+    rows.push([
+      scope,
+      pageUrl,
+      pageTitle,
+      "non-text-contrast",
+      "component-boundary",
+      "warning",
+      1,
+      "",
+      item.selector,
+      `Contrast ratio ${item.contrastRatio}:1.`,
+    ]);
+  }
+
+  for (const item of report.nonTextContrast?.lowContrastIcons || []) {
+    rows.push([
+      scope,
+      pageUrl,
+      pageTitle,
+      "non-text-contrast",
+      "icon-control",
+      "warning",
+      1,
+      "",
+      item.selector,
+      `Contrast ratio ${item.contrastRatio}:1.`,
+    ]);
+  }
+
+  if (report.journey) {
+    for (const item of report.journey.results.filter((step) => !step.success)) {
+      rows.push([
+        scope,
+        pageUrl,
+        pageTitle,
+        "journey",
+        item.action,
+        "failure",
+        1,
+        "",
+        "",
+        item.error || item.label || "",
+      ]);
+    }
+  }
+
+  return rows;
+}
+
+export function renderCsv(report) {
+  const rows = [
+    ["scope", "url", "title", "category", "rule_or_check", "severity", "count", "wcag_tags", "target", "message"],
+  ];
+
+  if (isAggregateReport(report)) {
+    for (const page of report.pages) {
+      rows.push(...collectSinglePageCsvRows(page, { scope: "crawl-page" }));
+    }
+  } else {
+    rows.push(...collectSinglePageCsvRows(report));
+  }
+
+  return toCsv(rows);
+}
+
+function renderSummaryChips(items) {
+  return items
+    .map(
+      (item) => `<div class="chip"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.value)}</span></div>`,
+    )
+    .join("");
+}
+
+function renderSinglePageHtml(report) {
+  const summaryChips = renderSummaryChips([
+    { label: "Axe", value: report.summary.axeViolationCount },
+    { label: "Contrast", value: report.summary.contrastViolationCount },
+    { label: "Keyboard", value: report.summary.keyboardWarningCount },
+    { label: "Reflow", value: report.summary.reflowWarningCount },
+    { label: "Form", value: report.summary.formWarningCount },
+    { label: "Non-text contrast", value: report.summary.nonTextContrastWarningCount },
+    { label: "Screen reader", value: report.summary.screenReaderWarningCount },
+  ]);
+
+  const violationItems =
+    report.axe.violations.length === 0
+      ? "<p>No axe violations detected for this sampled state.</p>"
+      : report.axe.violations
+          .map(
+            (violation) => `
+              <article class="finding">
+                <h3>${escapeHtml(violation.id)} <span>${escapeHtml(violation.impact)}</span></h3>
+                <p>${escapeHtml(violation.help)} (${violation.affectedNodes} node(s))</p>
+              </article>`,
+          )
+          .join("");
+
+  const warningLists = [
+    { title: "Keyboard warnings", items: report.keyboard.warnings },
+    { title: "Screen-reader proxy warnings", items: report.summary.screenReaderWarnings },
+    { title: "Form warnings", items: report.summary.formWarnings },
+    { title: "Non-text contrast warnings", items: report.summary.nonTextContrastWarnings },
+  ]
+    .map(({ title, items }) => {
+      const content =
+        items.length === 0
+          ? "<p>None.</p>"
+          : `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      return `<section class="panel"><h2>${escapeHtml(title)}</h2>${content}</section>`;
+    })
+    .join("");
+
+  const reflowItems =
+    report.reflow.length === 0
+      ? "<p>No reflow checks requested.</p>"
+      : report.reflow
+          .map(
+            (check) => `
+              <article class="finding">
+                <h3>${escapeHtml(`${check.width}px`)}</h3>
+                <p>Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}</p>
+                <p>${escapeHtml(check.warnings.join(" ") || "No warnings.")}</p>
+              </article>`,
+          )
+          .join("");
+
+  const journeySection = report.journey
+    ? `
+      <section class="panel">
+        <h2>Journey</h2>
+        <p>${escapeHtml(report.journey.name)}. Failed steps: ${escapeHtml(report.journey.failedSteps)}</p>
+      </section>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(report.metadata.title || report.metadata.url)} Accessibility Audit</title>
+    <style>
+      :root { color-scheme: light; --bg:#f4f0e8; --panel:#fffdf9; --ink:#171412; --muted:#6a6258; --line:#d8cfc2; --accent:#8a4f21; }
+      * { box-sizing:border-box; }
+      body { margin:0; font:16px/1.5 Georgia, "Times New Roman", serif; background:linear-gradient(180deg, #f4f0e8, #ede4d6); color:var(--ink); }
+      main { max-width:1100px; margin:0 auto; padding:32px 20px 48px; }
+      h1,h2,h3,p,ul { margin-top:0; }
+      .hero, .panel { background:rgba(255,253,249,0.92); border:1px solid var(--line); border-radius:20px; padding:20px; box-shadow:0 12px 30px rgba(35, 24, 10, 0.08); }
+      .hero { margin-bottom:20px; }
+      .grid { display:grid; gap:20px; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); }
+      .chips { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); margin-top:16px; }
+      .chip { border:1px solid var(--line); border-radius:16px; padding:12px 14px; background:#fff; }
+      .chip strong, .finding h3 span { display:block; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+      .chip span { font-size:1.6rem; color:var(--accent); }
+      .finding { border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
+      .finding:first-child { border-top:0; padding-top:0; margin-top:0; }
+      a { color:inherit; }
+      ul { padding-left:20px; }
+      .meta { color:var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="meta">${escapeHtml(report.metadata.url)}</p>
+        <h1>${escapeHtml(report.metadata.title || report.metadata.url)}</h1>
+        <p class="meta">Tested at ${escapeHtml(report.metadata.testedAt)}</p>
+        <div class="chips">${summaryChips}</div>
+      </section>
+      <div class="grid">
+        <section class="panel"><h2>Axe findings</h2>${violationItems}</section>
+        <section class="panel"><h2>Reflow</h2>${reflowItems}</section>
+      </div>
+      ${journeySection}
+      <div class="grid" style="margin-top:20px;">${warningLists}</div>
+    </main>
+  </body>
+</html>
+`;
+}
+
+function renderAggregateHtml(aggregateReport) {
+  const summaryChips = renderSummaryChips([
+    { label: "Pages", value: aggregateReport.summary.pagesAudited },
+    { label: "Axe", value: aggregateReport.summary.totalAxeViolations },
+    { label: "Keyboard", value: aggregateReport.summary.pagesWithKeyboardWarnings },
+    { label: "Reflow", value: aggregateReport.summary.pagesWithReflowWarnings },
+    { label: "Form", value: aggregateReport.summary.pagesWithFormWarnings },
+    { label: "Non-text contrast", value: aggregateReport.summary.pagesWithNonTextContrastWarnings },
+    { label: "Screen reader", value: aggregateReport.summary.pagesWithScreenReaderWarnings },
+  ]);
+
+  const pageCards = aggregateReport.pages
+    .map(
+      (page) => `
+        <article class="finding">
+          <h3>${escapeHtml(page.metadata.title || page.metadata.url)}</h3>
+          <p><a href="${escapeHtml(page.metadata.url)}">${escapeHtml(page.metadata.url)}</a></p>
+          <p>Axe: ${page.summary.axeViolationCount} | Keyboard: ${page.summary.keyboardWarningCount} | Form: ${page.summary.formWarningCount} | Non-text contrast: ${page.summary.nonTextContrastWarningCount}</p>
+        </article>`,
+    )
+    .join("");
+
+  const topRules =
+    aggregateReport.summary.topViolationRules.length === 0
+      ? "<p>No aggregate axe findings.</p>"
+      : `<ul>${aggregateReport.summary.topViolationRules
+          .map((item) => `<li>${escapeHtml(item.id)}: ${escapeHtml(item.count)}</li>`)
+          .join("")}</ul>`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(aggregateReport.metadata.seedUrl)} Accessibility Crawl</title>
+    <style>
+      :root { color-scheme: light; --bg:#f5efe4; --panel:#fffdf8; --ink:#171412; --muted:#6d6258; --line:#d9cfbe; --accent:#24524a; }
+      * { box-sizing:border-box; }
+      body { margin:0; font:16px/1.5 Georgia, "Times New Roman", serif; background:linear-gradient(180deg, #f5efe4, #ebe0cb); color:var(--ink); }
+      main { max-width:1100px; margin:0 auto; padding:32px 20px 48px; }
+      h1,h2,h3,p,ul { margin-top:0; }
+      .hero, .panel { background:rgba(255,253,248,0.94); border:1px solid var(--line); border-radius:20px; padding:20px; box-shadow:0 12px 30px rgba(27, 21, 11, 0.08); }
+      .hero { margin-bottom:20px; }
+      .grid { display:grid; gap:20px; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); }
+      .chips { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); margin-top:16px; }
+      .chip { border:1px solid var(--line); border-radius:16px; padding:12px 14px; background:#fff; }
+      .chip strong { display:block; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+      .chip span { font-size:1.6rem; color:var(--accent); }
+      .finding { border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
+      .finding:first-child { border-top:0; padding-top:0; margin-top:0; }
+      a { color:inherit; }
+      ul { padding-left:20px; }
+      .meta { color:var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="meta">${escapeHtml(aggregateReport.metadata.seedUrl)}</p>
+        <h1>Accessibility Crawl</h1>
+        <p class="meta">Tested at ${escapeHtml(aggregateReport.metadata.testedAt)}</p>
+        <div class="chips">${summaryChips}</div>
+      </section>
+      <div class="grid">
+        <section class="panel"><h2>Top violation rules</h2>${topRules}</section>
+        <section class="panel"><h2>Pages</h2>${pageCards}</section>
+      </div>
+    </main>
+  </body>
+</html>
+`;
+}
+
+export function renderHtmlReport(report) {
+  return isAggregateReport(report) ? renderAggregateHtml(report) : renderSinglePageHtml(report);
+}
+
 export async function createBrowserContext() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -1803,7 +2162,11 @@ export async function auditPageInContext(context, options) {
 
 export async function writeReportFiles(outBase, report, renderFn = renderMarkdown) {
   const markdown = renderFn(report);
+  const html = renderHtmlReport(report);
+  const csv = renderCsv(report);
   await fs.mkdir(path.dirname(outBase), { recursive: true });
   await fs.writeFile(`${outBase}.json`, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await fs.writeFile(`${outBase}.md`, markdown, "utf8");
+  await fs.writeFile(`${outBase}.html`, html, "utf8");
+  await fs.writeFile(`${outBase}.csv`, csv, "utf8");
 }

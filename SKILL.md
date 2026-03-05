@@ -5,7 +5,7 @@ description: Audit a live web page for accessibility issues from a URL. Use this
 
 # Web Accessibility Audit
 
-Use the bundled audit script to test a live URL in Chromium with Playwright and axe-core. The script produces both JSON and Markdown output so the results can be reviewed directly or reused in follow-up work.
+Use the bundled audit script to test a live URL in Chromium with Playwright and axe-core. The script produces JSON, Markdown, HTML, and CSV output so the results can be reviewed directly or reused in follow-up work.
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site
 Supported options:
 
 - `--url`: Required target URL. A positional URL also works.
-- `--out`: Output base path without extension. The script writes `<base>.json` and `<base>.md`.
+- `--out`: Output base path without extension. The script writes `<base>.json`, `<base>.md`, `<base>.html`, and `<base>.csv`.
 - `--tab-limit`: Maximum number of `Tab` presses to sample for keyboard traversal.
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
@@ -67,6 +67,7 @@ Supported options:
 - Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.
 - Reflow checks at narrow widths to flag horizontal scrolling and likely clipped content.
 - Scripted keyboard journeys with route, state-change, or visibility assertions when a `--journey-file` is supplied.
+- CSV and HTML exports for both single-page audits and crawls.
 
 ## Journey Files
 
