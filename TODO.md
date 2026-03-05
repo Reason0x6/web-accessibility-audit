@@ -14,6 +14,7 @@ Meaningfulness: Very high. Single-page audits miss repeated template defects and
 Implementation direction: Crawl a limited set of same-origin pages from nav links or a sitemap and aggregate defects.
 
 3. `P1` Screenshots for each issue
+Status: Implemented in this iteration.
 Meaningfulness: Very high. Screenshots make results actionable and reduce time to reproduce.
 Implementation direction: Capture page-level and element-level evidence for axe violations and key keyboard issues.
 

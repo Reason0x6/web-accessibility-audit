@@ -52,6 +52,97 @@ function simplifyAxeResults(items) {
   }));
 }
 
+function sanitizeFilePart(value) {
+  return value.replace(/[^a-z0-9-_]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "item";
+}
+
+async function captureScreenshot(locator, filePath) {
+  try {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.screenshot({ path: filePath });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function captureEvidence(page, axeViolations, keyboard, assetDir, screenshotLimit) {
+  const evidence = {
+    page: null,
+    violations: [],
+    keyboard: [],
+  };
+
+  await fs.mkdir(assetDir, { recursive: true });
+
+  const pagePath = path.join(assetDir, "page.png");
+  await page.screenshot({ path: pagePath, fullPage: true }).catch(() => {});
+  evidence.page = path.relative(process.cwd(), pagePath);
+
+  let screenshotCount = 0;
+  for (const violation of axeViolations) {
+    for (const node of violation.nodes) {
+      if (screenshotCount >= screenshotLimit) {
+        break;
+      }
+
+      const selector = Array.isArray(node.target) && node.target.length > 0 ? node.target[0] : null;
+      if (!selector) {
+        continue;
+      }
+
+      const screenshotPath = path.join(
+        assetDir,
+        `${String(screenshotCount + 1).padStart(2, "0")}-${sanitizeFilePart(violation.id)}.png`,
+      );
+
+      const locator = page.locator(selector).first();
+      const count = await locator.count().catch(() => 0);
+      if (count < 1) {
+        continue;
+      }
+
+      const captured = await captureScreenshot(locator, screenshotPath);
+      if (captured) {
+        evidence.violations.push({
+          id: violation.id,
+          target: selector,
+          path: path.relative(process.cwd(), screenshotPath),
+        });
+        screenshotCount += 1;
+      }
+    }
+  }
+
+  const keyboardWarnings = keyboard.stops.filter((stop) => !stop.isBodyFocus && !stop.hasVisibleFocus);
+  for (const [index, stop] of keyboardWarnings.entries()) {
+    if (screenshotCount >= screenshotLimit) {
+      break;
+    }
+
+    const locator = page.locator(stop.selector).first();
+    const count = await locator.count().catch(() => 0);
+    if (count < 1) {
+      continue;
+    }
+
+    const screenshotPath = path.join(
+      assetDir,
+      `${String(screenshotCount + 1).padStart(2, "0")}-keyboard-${String(index + 1).padStart(2, "0")}.png`,
+    );
+    const captured = await captureScreenshot(locator, screenshotPath);
+    if (captured) {
+      evidence.keyboard.push({
+        selector: stop.selector,
+        path: path.relative(process.cwd(), screenshotPath),
+      });
+      screenshotCount += 1;
+    }
+  }
+
+  return evidence;
+}
+
 async function collectActiveElement(page) {
   return page.evaluate(() => {
     function selectorFor(element) {
@@ -478,6 +569,21 @@ export function renderMarkdown(report) {
     lines.push("");
   }
 
+  if (report.evidence) {
+    lines.push("## Evidence");
+    lines.push("");
+    if (report.evidence.page) {
+      lines.push(`- Full page screenshot: ${report.evidence.page}`);
+    }
+    for (const item of report.evidence.violations) {
+      lines.push(`- ${item.id}: ${item.path}`);
+    }
+    for (const item of report.evidence.keyboard) {
+      lines.push(`- Keyboard focus evidence for ${item.selector}: ${item.path}`);
+    }
+    lines.push("");
+  }
+
   lines.push("## Limits");
   lines.push("");
   lines.push("- This is an automated audit of one page state, not a full manual accessibility review.");
@@ -554,6 +660,9 @@ export async function auditPageInContext(context, options) {
     tabLimit = 20,
     timeout = 45000,
     wait = 1000,
+    screenshots = false,
+    assetDir = null,
+    screenshotLimit = 10,
   } = options;
 
   const testedAt = new Date();
@@ -581,8 +690,7 @@ export async function auditPageInContext(context, options) {
     const keyboard = await runKeyboardAudit(page, tabLimit);
     const semantics = await collectSemanticSignals(page);
     const summary = buildSummary(axeRaw.violations, keyboard, semantics);
-
-    return {
+    const report = {
       metadata: {
         url: page.url(),
         title,
@@ -599,6 +707,12 @@ export async function auditPageInContext(context, options) {
       keyboard,
       semantics,
     };
+
+    if (screenshots && assetDir) {
+      report.evidence = await captureEvidence(page, axeRaw.violations, keyboard, assetDir, screenshotLimit);
+    }
+
+    return report;
   } finally {
     await page.close().catch(() => {});
   }

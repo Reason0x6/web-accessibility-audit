@@ -19,6 +19,8 @@ function parseArgs(argv) {
     tabLimit: 20,
     timeout: 45000,
     wait: 1000,
+    screenshots: false,
+    screenshotLimit: 10,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -70,6 +72,17 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--screenshots") {
+      args.screenshots = true;
+      continue;
+    }
+
+    if (token === "--screenshot-limit") {
+      args.screenshotLimit = Number.parseInt(argv[index + 1], 10);
+      index += 1;
+      continue;
+    }
+
     throw new Error(`Unknown argument: ${token}`);
   }
 
@@ -80,7 +93,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000]",
+      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run crawl -- --url https://www.wsp.com --max-pages 5",
@@ -203,7 +216,7 @@ function buildAggregateSummary(pages) {
   };
 }
 
-async function crawlSite(context, options) {
+async function crawlSite(context, options, outBase) {
   const seedUrl = normalizeCandidate(options.url);
   const origin = new URL(seedUrl).origin;
   const queue = [seedUrl];
@@ -222,6 +235,11 @@ async function crawlSite(context, options) {
       tabLimit: options.tabLimit,
       timeout: options.timeout,
       wait: options.wait,
+      screenshots: options.screenshots,
+      assetDir: options.screenshots
+        ? path.join(`${outBase}-assets`, `${String(reports.length + 1).padStart(2, "0")}-${slugifyUrl(currentUrl)}`)
+        : null,
+      screenshotLimit: options.screenshotLimit,
     });
 
     reports.push(report);
@@ -282,6 +300,10 @@ async function main() {
     throw new Error("--max-pages must be a positive integer.");
   }
 
+  if (!Number.isFinite(args.screenshotLimit) || args.screenshotLimit < 1) {
+    throw new Error("--screenshot-limit must be a positive integer.");
+  }
+
   const testedAt = new Date();
   const outBase =
     args.out ||
@@ -294,7 +316,7 @@ async function main() {
   const resources = await createBrowserContext();
 
   try {
-    const pages = await crawlSite(resources.context, args);
+    const pages = await crawlSite(resources.context, args, outBase);
     const aggregateReport = {
       metadata: {
         seedUrl: args.url,

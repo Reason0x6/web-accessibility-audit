@@ -17,6 +17,8 @@ function parseArgs(argv) {
     tabLimit: 20,
     timeout: 45000,
     wait: 1000,
+    screenshots: false,
+    screenshotLimit: 10,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -62,6 +64,17 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--screenshots") {
+      args.screenshots = true;
+      continue;
+    }
+
+    if (token === "--screenshot-limit") {
+      args.screenshotLimit = Number.parseInt(argv[index + 1], 10);
+      index += 1;
+      continue;
+    }
+
     throw new Error(`Unknown argument: ${token}`);
   }
 
@@ -72,7 +85,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",
@@ -107,6 +120,10 @@ async function main() {
     throw new Error("--wait must be zero or greater.");
   }
 
+  if (!Number.isFinite(args.screenshotLimit) || args.screenshotLimit < 1) {
+    throw new Error("--screenshot-limit must be a positive integer.");
+  }
+
   const testedAt = new Date();
   const outBase =
     args.out ||
@@ -120,6 +137,9 @@ async function main() {
       tabLimit: args.tabLimit,
       timeout: args.timeout,
       wait: args.wait,
+      screenshots: args.screenshots,
+      assetDir: args.screenshots ? `${outBase}-assets` : null,
+      screenshotLimit: args.screenshotLimit,
     });
     report.metadata.requestedUrl = args.url;
     report.metadata.requestedAt = testedAt.toISOString();

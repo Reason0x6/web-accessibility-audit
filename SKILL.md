@@ -34,8 +34,8 @@ The script writes reports into `reports/` by default and prints the output paths
 Run the script with:
 
 ```powershell
-node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000]
-node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000]
+node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--screenshots] [--screenshot-limit 10]
 ```
 
 Supported options:
@@ -46,6 +46,8 @@ Supported options:
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
 - `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
+- `--screenshots`: Save a full-page screenshot plus issue-focused evidence images.
+- `--screenshot-limit`: Cap how many issue-focused screenshots are captured.
 
 ## What The Script Checks
 
