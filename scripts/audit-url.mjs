@@ -19,7 +19,7 @@ function parseArgs(argv) {
     wait: 1000,
     reflowCheck: true,
     reflowWidths: [320, 768],
-    screenshots: false,
+    screenshots: true,
     screenshotLimit: 10,
   };
 
@@ -90,6 +90,11 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--skip-screenshots") {
+      args.screenshots = false;
+      continue;
+    }
+
     if (token === "--screenshot-limit") {
       args.screenshotLimit = Number.parseInt(argv[index + 1], 10);
       index += 1;
@@ -106,7 +111,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",

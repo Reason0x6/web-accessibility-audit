@@ -24,7 +24,7 @@ The script writes reports into `reports/` by default and prints the output paths
 
 1. Confirm the target page is reachable without credentials. If it is not, stop and ask for a reproducible public URL or a session setup plan.
 2. Install dependencies if `node_modules/` is missing.
-3. Run `npm run audit -- --url <page-url>`. By default this runs the full automated audit profile, including reflow checks.
+3. Run `npm run audit -- --url <page-url>`. By default this runs the full automated audit profile, including reflow checks and screenshot evidence capture.
 4. Use `npm run crawl -- --url <seed-url> --max-pages <n>` when the user needs repeated-template coverage across several same-origin pages.
 5. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
 6. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
@@ -34,8 +34,8 @@ The script writes reports into `reports/` by default and prints the output paths
 Run the script with:
 
 ```powershell
-node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]
-node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--screenshots] [--screenshot-limit 10]
+node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]
 ```
 
 Supported options:
@@ -48,7 +48,7 @@ Supported options:
 - `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
 - `--skip-reflow-check`: Skip narrow-width reflow checks. Reflow checks run by default.
 - `--reflow-widths`: Comma-separated viewport widths used by the reflow check.
-- `--screenshots`: Save a full-page screenshot plus issue-focused evidence images.
+- `--skip-screenshots`: Skip screenshot evidence capture. Screenshots run by default.
 - `--screenshot-limit`: Cap how many issue-focused screenshots are captured.
 
 ## What The Script Checks
