@@ -21,6 +21,11 @@ function parseArgs(argv) {
     wait: 1000,
     reflowCheck: true,
     reflowWidths: [320, 768],
+    mobileCheck: true,
+    mobileViewports: [
+      { label: "mobile-portrait", width: 390, height: 844 },
+      { label: "small-android", width: 360, height: 800 },
+    ],
     screenshots: true,
     screenshotLimit: 10,
   };
@@ -93,6 +98,31 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--mobile-check") {
+      args.mobileCheck = true;
+      continue;
+    }
+
+    if (token === "--skip-mobile-check") {
+      args.mobileCheck = false;
+      continue;
+    }
+
+    if (token === "--mobile-viewports") {
+      args.mobileViewports = argv[index + 1]
+        .split(",")
+        .map((value, itemIndex) => {
+          const [width, height] = value.toLowerCase().split("x").map((part) => Number.parseInt(part.trim(), 10));
+          if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+            return null;
+          }
+          return { label: `mobile-${itemIndex + 1}`, width, height };
+        })
+        .filter(Boolean);
+      index += 1;
+      continue;
+    }
+
     if (token === "--screenshots") {
       args.screenshots = true;
       continue;
@@ -119,7 +149,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]",
+      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run crawl -- --url https://www.wsp.com --max-pages 5",
@@ -221,6 +251,7 @@ function buildAggregateSummary(pages) {
   let totalAxeViolations = 0;
   let pagesWithKeyboardWarnings = 0;
   let pagesWithReflowWarnings = 0;
+  let pagesWithMobileWarnings = 0;
   let pagesWithFormWarnings = 0;
   let pagesWithNonTextContrastWarnings = 0;
   let pagesWithScreenReaderWarnings = 0;
@@ -232,6 +263,9 @@ function buildAggregateSummary(pages) {
     }
     if (page.summary.reflowWarningCount > 0) {
       pagesWithReflowWarnings += 1;
+    }
+    if (page.summary.mobileWarningCount > 0) {
+      pagesWithMobileWarnings += 1;
     }
     if (page.summary.formWarningCount > 0) {
       pagesWithFormWarnings += 1;
@@ -273,6 +307,7 @@ function buildAggregateSummary(pages) {
     wcagSummary,
     pagesWithKeyboardWarnings,
     pagesWithReflowWarnings,
+    pagesWithMobileWarnings,
     pagesWithFormWarnings,
     pagesWithNonTextContrastWarnings,
     pagesWithScreenReaderWarnings,
@@ -301,6 +336,8 @@ async function crawlSite(context, options, outBase) {
       wait: options.wait,
       reflowCheck: options.reflowCheck,
       reflowWidths: options.reflowWidths,
+      mobileCheck: options.mobileCheck,
+      mobileViewports: options.mobileViewports,
       screenshots: options.screenshots,
       assetDir: options.screenshots
         ? path.join(`${outBase}-assets`, `${String(reports.length + 1).padStart(2, "0")}-${slugifyUrl(currentUrl)}`)
@@ -372,6 +409,10 @@ async function main() {
 
   if (args.reflowCheck && args.reflowWidths.length === 0) {
     throw new Error("--reflow-widths must contain at least one positive width.");
+  }
+
+  if (args.mobileCheck && args.mobileViewports.length === 0) {
+    throw new Error("--mobile-viewports must contain at least one WIDTHxHEIGHT pair.");
   }
 
   const testedAt = new Date();

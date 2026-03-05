@@ -36,8 +36,8 @@ Use `--journey-file <json>` when the user needs a scripted keyboard flow or page
 Run the script with:
 
 ```powershell
-node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]
-node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]
+node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
 ```
 
 Supported options:
@@ -51,6 +51,8 @@ Supported options:
 - `--max-pages`: Crawl mode only. Limit how many same-origin pages are audited from the seed URL.
 - `--skip-reflow-check`: Skip narrow-width reflow checks. Reflow checks run by default.
 - `--reflow-widths`: Comma-separated viewport widths used by the reflow check.
+- `--skip-mobile-check`: Skip mobile viewport checks. Mobile checks run by default.
+- `--mobile-viewports`: Comma-separated `WIDTHxHEIGHT` viewport pairs used by the mobile check.
 - `--skip-screenshots`: Skip screenshot evidence capture. Screenshots run by default.
 - `--screenshot-limit`: Cap how many issue-focused screenshots are captured.
 
@@ -66,6 +68,7 @@ Supported options:
 - Crawl aggregation across multiple same-origin pages, including repeated rule IDs and per-page summaries.
 - Severity-bucketed reporting with WCAG tags surfaced for each violation and in the overall summary.
 - Reflow checks at narrow widths to flag horizontal scrolling and likely clipped content.
+- Mobile viewport checks for small touch targets and horizontal scrolling at phone-sized widths.
 - Scripted keyboard journeys with route, state-change, or visibility assertions when a `--journey-file` is supplied.
 - CSV and HTML exports for both single-page audits and crawls.
 

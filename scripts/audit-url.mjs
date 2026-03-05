@@ -20,6 +20,11 @@ function parseArgs(argv) {
     wait: 1000,
     reflowCheck: true,
     reflowWidths: [320, 768],
+    mobileCheck: true,
+    mobileViewports: [
+      { label: "mobile-portrait", width: 390, height: 844 },
+      { label: "small-android", width: 360, height: 800 },
+    ],
     screenshots: true,
     screenshotLimit: 10,
   };
@@ -92,6 +97,31 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--mobile-check") {
+      args.mobileCheck = true;
+      continue;
+    }
+
+    if (token === "--skip-mobile-check") {
+      args.mobileCheck = false;
+      continue;
+    }
+
+    if (token === "--mobile-viewports") {
+      args.mobileViewports = argv[index + 1]
+        .split(",")
+        .map((value, itemIndex) => {
+          const [width, height] = value.toLowerCase().split("x").map((part) => Number.parseInt(part.trim(), 10));
+          if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+            return null;
+          }
+          return { label: `mobile-${itemIndex + 1}`, width, height };
+        })
+        .filter(Boolean);
+      index += 1;
+      continue;
+    }
+
     if (token === "--screenshots") {
       args.screenshots = true;
       continue;
@@ -118,7 +148,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--journey-file path/to/journey.json] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-screenshots] [--screenshot-limit 10]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--journey-file path/to/journey.json] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",
@@ -161,6 +191,10 @@ async function main() {
     throw new Error("--reflow-widths must contain at least one positive width.");
   }
 
+  if (args.mobileCheck && args.mobileViewports.length === 0) {
+    throw new Error("--mobile-viewports must contain at least one WIDTHxHEIGHT pair.");
+  }
+
   const testedAt = new Date();
   const outBase =
     args.out ||
@@ -178,6 +212,8 @@ async function main() {
       journey,
       reflowCheck: args.reflowCheck,
       reflowWidths: args.reflowWidths,
+      mobileCheck: args.mobileCheck,
+      mobileViewports: args.mobileViewports,
       screenshots: args.screenshots,
       assetDir: args.screenshots ? `${outBase}-assets` : null,
       screenshotLimit: args.screenshotLimit,

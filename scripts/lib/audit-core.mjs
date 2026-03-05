@@ -953,6 +953,96 @@ async function collectNonTextContrastSignals(page) {
   });
 }
 
+async function collectMobileChecks(page, viewports) {
+  const originalViewport = page.viewportSize() || { width: 1440, height: 960 };
+  const checks = [];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.waitForTimeout(300);
+
+    const check = await page.evaluate((currentViewport) => {
+      function selectorFor(element) {
+        if (element.id) {
+          return `#${element.id}`;
+        }
+
+        const name = element.getAttribute("name");
+        if (name) {
+          return `${element.tagName.toLowerCase()}[name="${name}"]`;
+        }
+
+        return element.tagName.toLowerCase();
+      }
+
+      function textFor(element) {
+        return (element.innerText || element.textContent || element.getAttribute("aria-label") || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120);
+      }
+
+      const candidates = Array.from(
+        document.querySelectorAll(
+          'button, a[href], input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"]',
+        ),
+      );
+
+      const touchTargetFailures = candidates
+        .filter((element) => {
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            Number.parseFloat(style.opacity || "1") === 0 ||
+            element.hasAttribute("disabled")
+          ) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && (rect.width < 44 || rect.height < 44);
+        })
+        .slice(0, 10)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            selector: selectorFor(element),
+            text: textFor(element),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        });
+
+      const horizontalScrollDetected = document.documentElement.scrollWidth > window.innerWidth + 1;
+      const warnings = [];
+      if (horizontalScrollDetected) {
+        warnings.push("Page requires horizontal scrolling in this mobile viewport.");
+      }
+      if (touchTargetFailures.length > 0) {
+        warnings.push(`Detected ${touchTargetFailures.length} touch target sample(s) smaller than 44 by 44 CSS pixels.`);
+      }
+
+      return {
+        label: currentViewport.label,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        horizontalScrollDetected,
+        touchTargetFailures,
+        warningCount: warnings.length,
+        warnings,
+      };
+    }, viewport);
+
+    checks.push(check);
+  }
+
+  await page.setViewportSize(originalViewport);
+  await page.waitForTimeout(100);
+
+  return checks;
+}
+
 async function describeFocusedElement(page) {
   return page.evaluate(() => {
     const active = document.activeElement;
@@ -1324,7 +1414,7 @@ async function collectReflowChecks(page, widths) {
   return checks;
 }
 
-function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast, reflowChecks = []) {
+function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast, mobileChecks = [], reflowChecks = []) {
   const impactCounts = summarizeImpactCounts(axeViolations);
   const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
@@ -1409,6 +1499,7 @@ function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast,
     formWarningCount: formWarnings.length,
     nonTextContrastWarningCount:
       nonTextContrast.counts.lowContrastBoundaries + nonTextContrast.counts.lowContrastIcons,
+    mobileWarningCount: mobileChecks.filter((check) => check.warningCount > 0).length,
     journeyFailureCount: 0,
     keyboardWarningCount: keyboard.warnings.length,
     reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
@@ -1433,6 +1524,7 @@ export function renderMarkdown(report) {
   lines.push(`- Non-text contrast warnings: ${summary.nonTextContrastWarningCount}`);
   lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
   lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
+  lines.push(`- Mobile warnings: ${summary.mobileWarningCount}`);
   lines.push(`- Form warnings: ${summary.formWarningCount}`);
   lines.push(`- Journey failures: ${summary.journeyFailureCount}`);
   lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
@@ -1541,6 +1633,24 @@ export function renderMarkdown(report) {
       lines.push(`- Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}`);
       lines.push(`- Overflow sample count: ${check.overflowingElements.length}`);
       lines.push(`- Clipped text sample count: ${check.clippedTextElements.length}`);
+      for (const warning of check.warnings) {
+        lines.push(`- ${warning}`);
+      }
+      lines.push("");
+    }
+  }
+
+  lines.push("## Mobile Checks");
+  lines.push("");
+  if (!report.mobile || report.mobile.length === 0) {
+    lines.push("No mobile checks were requested for this audit.");
+    lines.push("");
+  } else {
+    for (const check of report.mobile) {
+      lines.push(`### ${check.label} (${check.width}x${check.height})`);
+      lines.push("");
+      lines.push(`- Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}`);
+      lines.push(`- Small touch target sample count: ${check.touchTargetFailures.length}`);
       for (const warning of check.warnings) {
         lines.push(`- ${warning}`);
       }
@@ -1675,6 +1785,7 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Total axe violations: ${summary.totalAxeViolations}`);
   lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
   lines.push(`- Pages with reflow warnings: ${summary.pagesWithReflowWarnings}`);
+  lines.push(`- Pages with mobile warnings: ${summary.pagesWithMobileWarnings}`);
   lines.push(`- Pages with form warnings: ${summary.pagesWithFormWarnings}`);
   lines.push(`- Pages with non-text contrast warnings: ${summary.pagesWithNonTextContrastWarnings}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
@@ -1719,6 +1830,7 @@ export function renderAggregateMarkdown(aggregateReport) {
     lines.push(`- URL: ${page.metadata.url}`);
     lines.push(`- Axe violations: ${page.summary.axeViolationCount}`);
     lines.push(`- Keyboard warnings: ${page.summary.keyboardWarningCount}`);
+    lines.push(`- Mobile warnings: ${page.summary.mobileWarningCount}`);
     lines.push(`- Form warnings: ${page.summary.formWarningCount}`);
     lines.push(`- Non-text contrast warnings: ${page.summary.nonTextContrastWarningCount}`);
     lines.push(`- Screen-reader warnings: ${page.summary.screenReaderWarningCount}`);
@@ -1758,6 +1870,26 @@ function collectSinglePageCsvRows(report, context = {}) {
   for (const check of report.reflow || []) {
     for (const warning of check.warnings) {
       rows.push([scope, pageUrl, pageTitle, "reflow", `width-${check.width}`, "warning", 1, "", "", warning]);
+    }
+  }
+
+  for (const check of report.mobile || []) {
+    for (const warning of check.warnings) {
+      rows.push([scope, pageUrl, pageTitle, "mobile", check.label, "warning", 1, "", "", warning]);
+    }
+    for (const item of check.touchTargetFailures || []) {
+      rows.push([
+        scope,
+        pageUrl,
+        pageTitle,
+        "mobile",
+        "touch-target",
+        "warning",
+        1,
+        "",
+        item.selector,
+        `${item.width}x${item.height} CSS pixels.`,
+      ]);
     }
   }
 
@@ -1884,6 +2016,7 @@ function renderSinglePageHtml(report) {
     { label: "Contrast", value: report.summary.contrastViolationCount },
     { label: "Keyboard", value: report.summary.keyboardWarningCount },
     { label: "Reflow", value: report.summary.reflowWarningCount },
+    { label: "Mobile", value: report.summary.mobileWarningCount },
     { label: "Form", value: report.summary.formWarningCount },
     { label: "Non-text contrast", value: report.summary.nonTextContrastWarningCount },
     { label: "Screen reader", value: report.summary.screenReaderWarningCount },
@@ -1904,6 +2037,7 @@ function renderSinglePageHtml(report) {
 
   const warningLists = [
     { title: "Keyboard warnings", items: report.keyboard.warnings },
+    { title: "Mobile warnings", items: (report.mobile || []).flatMap((check) => check.warnings) },
     { title: "Screen-reader proxy warnings", items: report.summary.screenReaderWarnings },
     { title: "Form warnings", items: report.summary.formWarnings },
     { title: "Non-text contrast warnings", items: report.summary.nonTextContrastWarnings },
@@ -1925,6 +2059,20 @@ function renderSinglePageHtml(report) {
             (check) => `
               <article class="finding">
                 <h3>${escapeHtml(`${check.width}px`)}</h3>
+                <p>Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}</p>
+                <p>${escapeHtml(check.warnings.join(" ") || "No warnings.")}</p>
+              </article>`,
+          )
+          .join("");
+
+  const mobileItems =
+    !report.mobile || report.mobile.length === 0
+      ? "<p>No mobile checks requested.</p>"
+      : report.mobile
+          .map(
+            (check) => `
+              <article class="finding">
+                <h3>${escapeHtml(`${check.label} (${check.width}x${check.height})`)}</h3>
                 <p>Horizontal scroll: ${check.horizontalScrollDetected ? "yes" : "no"}</p>
                 <p>${escapeHtml(check.warnings.join(" ") || "No warnings.")}</p>
               </article>`,
@@ -1977,6 +2125,7 @@ function renderSinglePageHtml(report) {
         <section class="panel"><h2>Axe findings</h2>${violationItems}</section>
         <section class="panel"><h2>Reflow</h2>${reflowItems}</section>
       </div>
+      <section class="panel" style="margin-top:20px;"><h2>Mobile</h2>${mobileItems}</section>
       ${journeySection}
       <div class="grid" style="margin-top:20px;">${warningLists}</div>
     </main>
@@ -1991,6 +2140,7 @@ function renderAggregateHtml(aggregateReport) {
     { label: "Axe", value: aggregateReport.summary.totalAxeViolations },
     { label: "Keyboard", value: aggregateReport.summary.pagesWithKeyboardWarnings },
     { label: "Reflow", value: aggregateReport.summary.pagesWithReflowWarnings },
+    { label: "Mobile", value: aggregateReport.summary.pagesWithMobileWarnings },
     { label: "Form", value: aggregateReport.summary.pagesWithFormWarnings },
     { label: "Non-text contrast", value: aggregateReport.summary.pagesWithNonTextContrastWarnings },
     { label: "Screen reader", value: aggregateReport.summary.pagesWithScreenReaderWarnings },
@@ -2002,7 +2152,7 @@ function renderAggregateHtml(aggregateReport) {
         <article class="finding">
           <h3>${escapeHtml(page.metadata.title || page.metadata.url)}</h3>
           <p><a href="${escapeHtml(page.metadata.url)}">${escapeHtml(page.metadata.url)}</a></p>
-          <p>Axe: ${page.summary.axeViolationCount} | Keyboard: ${page.summary.keyboardWarningCount} | Form: ${page.summary.formWarningCount} | Non-text contrast: ${page.summary.nonTextContrastWarningCount}</p>
+          <p>Axe: ${page.summary.axeViolationCount} | Keyboard: ${page.summary.keyboardWarningCount} | Mobile: ${page.summary.mobileWarningCount} | Form: ${page.summary.formWarningCount} | Non-text contrast: ${page.summary.nonTextContrastWarningCount}</p>
         </article>`,
     )
     .join("");
@@ -2090,6 +2240,11 @@ export async function auditPageInContext(context, options) {
     journey = null,
     reflowCheck = false,
     reflowWidths = [320, 768],
+    mobileCheck = false,
+    mobileViewports = [
+      { label: "mobile-portrait", width: 390, height: 844 },
+      { label: "small-android", width: 360, height: 800 },
+    ],
     screenshots = false,
     assetDir = null,
     screenshotLimit = 10,
@@ -2120,10 +2275,11 @@ export async function auditPageInContext(context, options) {
     const keyboard = await runKeyboardAudit(page, tabLimit);
     const semantics = await collectSemanticSignals(page);
     const reflow = reflowCheck ? await collectReflowChecks(page, reflowWidths) : [];
+    const mobile = mobileCheck ? await collectMobileChecks(page, mobileViewports) : [];
     const journeyReport = journey ? await runJourney(page, journey) : null;
     const form = await collectFormSignals(page);
     const nonTextContrast = await collectNonTextContrastSignals(page);
-    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, nonTextContrast, reflow);
+    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, nonTextContrast, mobile, reflow);
     const report = {
       metadata: {
         url: page.url(),
@@ -2140,6 +2296,7 @@ export async function auditPageInContext(context, options) {
       },
       keyboard,
       reflow,
+      mobile,
       semantics,
       form,
       nonTextContrast,

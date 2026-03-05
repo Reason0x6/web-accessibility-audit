@@ -55,6 +55,7 @@ Meaningfulness: Medium-high. Reporting format improves adoption and sharing.
 Implementation direction: Export aggregated findings in CSV and publish an HTML summary page.
 
 11. `P2` Mobile accessibility checks
+Status: Implemented in this iteration.
 Meaningfulness: Medium-high. Important, but better after core desktop and journey coverage exist.
 Implementation direction: Add touch-target and mobile viewport runs.
 
