@@ -12,9 +12,11 @@ import {
   timestampForFile,
   writeReportFiles,
 } from "./lib/audit-core.mjs";
+import { applyRequirementsSettings, loadRequirementsConfig } from "./lib/requirements-config.mjs";
 
 function parseArgs(argv) {
   const args = {
+    provided: new Set(),
     tabLimit: 20,
     timeout: 45000,
     wait: 1000,
@@ -44,47 +46,62 @@ function parseArgs(argv) {
 
     if (token === "--url") {
       args.url = argv[index + 1];
+      args.provided.add("url");
       index += 1;
       continue;
     }
 
     if (token === "--out") {
       args.out = argv[index + 1];
+      args.provided.add("out");
       index += 1;
       continue;
     }
 
     if (token === "--tab-limit") {
       args.tabLimit = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("tabLimit");
       index += 1;
       continue;
     }
 
     if (token === "--timeout") {
       args.timeout = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("timeout");
       index += 1;
       continue;
     }
 
     if (token === "--wait") {
       args.wait = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("wait");
       index += 1;
       continue;
     }
 
     if (token === "--journey-file") {
       args.journeyFile = argv[index + 1];
+      args.provided.add("journeyFile");
+      index += 1;
+      continue;
+    }
+
+    if (token === "--requirements-file") {
+      args.requirementsFile = argv[index + 1];
+      args.provided.add("requirementsFile");
       index += 1;
       continue;
     }
 
     if (token === "--reflow-check") {
       args.reflowCheck = true;
+      args.provided.add("reflowCheck");
       continue;
     }
 
     if (token === "--skip-reflow-check") {
       args.reflowCheck = false;
+      args.provided.add("reflowCheck");
       continue;
     }
 
@@ -93,17 +110,20 @@ function parseArgs(argv) {
         .split(",")
         .map((value) => Number.parseInt(value.trim(), 10))
         .filter((value) => Number.isFinite(value) && value > 0);
+      args.provided.add("reflowWidths");
       index += 1;
       continue;
     }
 
     if (token === "--mobile-check") {
       args.mobileCheck = true;
+      args.provided.add("mobileCheck");
       continue;
     }
 
     if (token === "--skip-mobile-check") {
       args.mobileCheck = false;
+      args.provided.add("mobileCheck");
       continue;
     }
 
@@ -118,22 +138,26 @@ function parseArgs(argv) {
           return { label: `mobile-${itemIndex + 1}`, width, height };
         })
         .filter(Boolean);
+      args.provided.add("mobileViewports");
       index += 1;
       continue;
     }
 
     if (token === "--screenshots") {
       args.screenshots = true;
+      args.provided.add("screenshots");
       continue;
     }
 
     if (token === "--skip-screenshots") {
       args.screenshots = false;
+      args.provided.add("screenshots");
       continue;
     }
 
     if (token === "--screenshot-limit") {
       args.screenshotLimit = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("screenshotLimit");
       index += 1;
       continue;
     }
@@ -148,7 +172,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--journey-file path/to/journey.json] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
+      "  node scripts/audit-url.mjs --url <page-url> [--out reports/name] [--requirements-file path/to/requirements.json] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--journey-file path/to/journey.json] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run audit -- --url https://example.com",
@@ -158,7 +182,9 @@ function printUsage() {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const parsedArgs = parseArgs(process.argv.slice(2));
+  const requirements = await loadRequirementsConfig(parsedArgs.requirementsFile);
+  const args = applyRequirementsSettings(parsedArgs, requirements, "audit");
 
   if (args.help) {
     printUsage();
@@ -214,12 +240,17 @@ async function main() {
       reflowWidths: args.reflowWidths,
       mobileCheck: args.mobileCheck,
       mobileViewports: args.mobileViewports,
+      requirements: args.requirements || null,
       screenshots: args.screenshots,
       assetDir: args.screenshots ? `${outBase}-assets` : null,
       screenshotLimit: args.screenshotLimit,
     });
     report.metadata.requestedUrl = args.url;
     report.metadata.requestedAt = testedAt.toISOString();
+    if (args.requirements) {
+      report.metadata.requirementsFile = args.requirements.file;
+      report.metadata.requirementsName = args.requirements.name;
+    }
 
     await writeReportFiles(outBase, report);
 

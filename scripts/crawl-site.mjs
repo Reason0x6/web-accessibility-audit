@@ -12,9 +12,11 @@ import {
   timestampForFile,
   writeReportFiles,
 } from "./lib/audit-core.mjs";
+import { applyRequirementsSettings, loadRequirementsConfig } from "./lib/requirements-config.mjs";
 
 function parseArgs(argv) {
   const args = {
+    provided: new Set(),
     maxPages: 5,
     tabLimit: 20,
     timeout: 45000,
@@ -45,47 +47,62 @@ function parseArgs(argv) {
 
     if (token === "--url") {
       args.url = argv[index + 1];
+      args.provided.add("url");
       index += 1;
       continue;
     }
 
     if (token === "--out") {
       args.out = argv[index + 1];
+      args.provided.add("out");
       index += 1;
       continue;
     }
 
     if (token === "--max-pages") {
       args.maxPages = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("maxPages");
       index += 1;
       continue;
     }
 
     if (token === "--tab-limit") {
       args.tabLimit = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("tabLimit");
       index += 1;
       continue;
     }
 
     if (token === "--timeout") {
       args.timeout = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("timeout");
       index += 1;
       continue;
     }
 
     if (token === "--wait") {
       args.wait = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("wait");
+      index += 1;
+      continue;
+    }
+
+    if (token === "--requirements-file") {
+      args.requirementsFile = argv[index + 1];
+      args.provided.add("requirementsFile");
       index += 1;
       continue;
     }
 
     if (token === "--reflow-check") {
       args.reflowCheck = true;
+      args.provided.add("reflowCheck");
       continue;
     }
 
     if (token === "--skip-reflow-check") {
       args.reflowCheck = false;
+      args.provided.add("reflowCheck");
       continue;
     }
 
@@ -94,17 +111,20 @@ function parseArgs(argv) {
         .split(",")
         .map((value) => Number.parseInt(value.trim(), 10))
         .filter((value) => Number.isFinite(value) && value > 0);
+      args.provided.add("reflowWidths");
       index += 1;
       continue;
     }
 
     if (token === "--mobile-check") {
       args.mobileCheck = true;
+      args.provided.add("mobileCheck");
       continue;
     }
 
     if (token === "--skip-mobile-check") {
       args.mobileCheck = false;
+      args.provided.add("mobileCheck");
       continue;
     }
 
@@ -119,22 +139,26 @@ function parseArgs(argv) {
           return { label: `mobile-${itemIndex + 1}`, width, height };
         })
         .filter(Boolean);
+      args.provided.add("mobileViewports");
       index += 1;
       continue;
     }
 
     if (token === "--screenshots") {
       args.screenshots = true;
+      args.provided.add("screenshots");
       continue;
     }
 
     if (token === "--skip-screenshots") {
       args.screenshots = false;
+      args.provided.add("screenshots");
       continue;
     }
 
     if (token === "--screenshot-limit") {
       args.screenshotLimit = Number.parseInt(argv[index + 1], 10);
+      args.provided.add("screenshotLimit");
       index += 1;
       continue;
     }
@@ -149,7 +173,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
+      "  node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/name] [--requirements-file path/to/requirements.json] [--tab-limit 20] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]",
       "",
       "Examples:",
       "  npm run crawl -- --url https://www.wsp.com --max-pages 5",
@@ -254,6 +278,7 @@ function buildAggregateSummary(pages) {
   let pagesWithMobileWarnings = 0;
   let pagesWithFormWarnings = 0;
   let pagesWithNonTextContrastWarnings = 0;
+  let pagesWithCustomRequirementFailures = 0;
   let pagesWithScreenReaderWarnings = 0;
 
   for (const page of pages) {
@@ -272,6 +297,9 @@ function buildAggregateSummary(pages) {
     }
     if (page.summary.nonTextContrastWarningCount > 0) {
       pagesWithNonTextContrastWarnings += 1;
+    }
+    if (page.summary.customRequirementFailureCount > 0) {
+      pagesWithCustomRequirementFailures += 1;
     }
     if (page.summary.screenReaderWarningCount > 0) {
       pagesWithScreenReaderWarnings += 1;
@@ -310,6 +338,7 @@ function buildAggregateSummary(pages) {
     pagesWithMobileWarnings,
     pagesWithFormWarnings,
     pagesWithNonTextContrastWarnings,
+    pagesWithCustomRequirementFailures,
     pagesWithScreenReaderWarnings,
     topViolationRules,
   };
@@ -338,6 +367,7 @@ async function crawlSite(context, options, outBase) {
       reflowWidths: options.reflowWidths,
       mobileCheck: options.mobileCheck,
       mobileViewports: options.mobileViewports,
+      requirements: options.requirements || null,
       screenshots: options.screenshots,
       assetDir: options.screenshots
         ? path.join(`${outBase}-assets`, `${String(reports.length + 1).padStart(2, "0")}-${slugifyUrl(currentUrl)}`)
@@ -386,7 +416,9 @@ async function crawlSite(context, options, outBase) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const parsedArgs = parseArgs(process.argv.slice(2));
+  const requirements = await loadRequirementsConfig(parsedArgs.requirementsFile);
+  const args = applyRequirementsSettings(parsedArgs, requirements, "crawl");
 
   if (args.help) {
     printUsage();
@@ -433,6 +465,8 @@ async function main() {
         seedUrl: args.url,
         testedAt: testedAt.toISOString(),
         maxPages: args.maxPages,
+        requirementsFile: args.requirements?.file || null,
+        requirementsName: args.requirements?.name || null,
       },
       summary: buildAggregateSummary(pages),
       pages,

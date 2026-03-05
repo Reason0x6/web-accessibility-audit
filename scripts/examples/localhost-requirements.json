@@ -1,0 +1,52 @@
+{
+  "name": "Localhost custom accessibility policy",
+  "settings": {
+    "tabLimit": 24,
+    "reflowWidths": [320, 768],
+    "mobileViewports": ["390x844", "360x800"]
+  },
+  "severityOverrides": {
+    "axe": {
+      "color-contrast": "critical"
+    }
+  },
+  "rules": [
+    {
+      "id": "root-lang",
+      "type": "attribute_equals",
+      "selector": "html",
+      "attribute": "lang",
+      "value": "en",
+      "severity": "serious",
+      "message": "The root html element should declare lang=\"en\"."
+    },
+    {
+      "id": "home-contact-button",
+      "type": "selector_visible",
+      "selector": "button:has-text(\"CONTACT\")",
+      "severity": "moderate",
+      "urlMatches": "http://localhost:4200/$",
+      "message": "The home page should expose the CONTACT button."
+    },
+    {
+      "id": "tp7-source-form",
+      "type": "selector_visible",
+      "selector": "form",
+      "severity": "serious",
+      "urlIncludes": "/tp-7-youtube",
+      "message": "The TP-7 page should expose the source form."
+    }
+  ],
+  "journeys": [
+    {
+      "file": "./keyboard-home-to-tp7.json",
+      "severity": "serious",
+      "urlMatches": "http://localhost:4200/$"
+    },
+    {
+      "file": "./tp7-invalid-url-state.json",
+      "severity": "serious",
+      "urlIncludes": "/tp-7-youtube"
+    }
+  ]
+}

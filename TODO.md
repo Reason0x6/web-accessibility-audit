@@ -79,6 +79,11 @@ Implementation direction: Add reusable login hooks or storage-state support.
 Meaningfulness: Context dependent. Important when files are central to the site, but separate from core page automation.
 Implementation direction: Detect linked documents and hand off to a dedicated file-audit workflow.
 
+17. `P2` Config-driven custom requirements
+Status: Implemented in this iteration.
+Meaningfulness: Medium-high. Teams often need route-specific policies, custom journeys, and local severity mapping without editing the skill code.
+Implementation direction: Load a JSON requirements file that can define custom settings, scoped rules, scoped journeys, and axe severity overrides.
+
 ## Implementation Order For This Iteration
 
 1. Multi-page crawl and aggregation

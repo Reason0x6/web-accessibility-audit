@@ -1338,6 +1338,231 @@ async function runJourney(page, journey) {
   };
 }
 
+function applyAxeSeverityOverrides(violations, overrides = {}) {
+  return violations.map((violation) => ({
+    ...violation,
+    impact: overrides[violation.id] || violation.impact || "unknown",
+  }));
+}
+
+function matchesRequirementScope(url, item = {}) {
+  const includes = item.urlIncludes;
+  const matches = item.urlMatches;
+
+  if (includes !== undefined) {
+    const values = Array.isArray(includes) ? includes : [includes];
+    if (!values.some((value) => url.includes(String(value)))) {
+      return false;
+    }
+  }
+
+  if (matches !== undefined) {
+    const patterns = Array.isArray(matches) ? matches : [matches];
+    if (!patterns.some((pattern) => new RegExp(String(pattern)).test(url))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function evaluateRequirementRule(page, rule) {
+  const result = {
+    id: rule.id || rule.type || "custom-rule",
+    label: rule.label || null,
+    type: rule.type,
+    severity: rule.severity || "serious",
+    selector: rule.selector || null,
+    success: true,
+    message: rule.message || "",
+  };
+  const timeout = rule.timeout ?? 5000;
+
+  try {
+    let locator = null;
+    let count = 0;
+    if (rule.selector) {
+      locator = page.locator(rule.selector);
+      count = await locator.count();
+    }
+
+    switch (rule.type) {
+      case "selector_exists":
+        if (!locator) {
+          throw new Error("selector_exists requires a selector.");
+        }
+        if (count < 1) {
+          throw new Error(rule.message || `No element matched ${rule.selector}.`);
+        }
+        result.observed = `${count} match(es)`;
+        break;
+      case "selector_absent":
+        if (!locator) {
+          throw new Error("selector_absent requires a selector.");
+        }
+        if (count > 0) {
+          throw new Error(rule.message || `${rule.selector} matched ${count} element(s).`);
+        }
+        result.observed = "0 matches";
+        break;
+      case "selector_visible":
+        if (!locator) {
+          throw new Error("selector_visible requires a selector.");
+        }
+        if (count < 1 || !(await locator.first().isVisible({ timeout }))) {
+          throw new Error(rule.message || `${rule.selector} was not visible.`);
+        }
+        result.observed = "visible";
+        break;
+      case "text_includes": {
+        if (!locator || typeof rule.value !== "string") {
+          throw new Error("text_includes requires selector and value.");
+        }
+        const text = await locator.first().innerText({ timeout });
+        result.observed = trimText(text, 180);
+        if (!text.toLowerCase().includes(rule.value.toLowerCase())) {
+          throw new Error(rule.message || `Text for ${rule.selector} did not include "${rule.value}".`);
+        }
+        break;
+      }
+      case "text_excludes": {
+        const text = locator
+          ? await locator.first().innerText({ timeout })
+          : await page.locator("body").innerText({ timeout });
+        result.observed = trimText(text, 180);
+        if (typeof rule.value !== "string") {
+          throw new Error("text_excludes requires a value.");
+        }
+        if (text.toLowerCase().includes(rule.value.toLowerCase())) {
+          throw new Error(rule.message || `Text unexpectedly included "${rule.value}".`);
+        }
+        break;
+      }
+      case "attribute_equals": {
+        if (!locator || !rule.attribute) {
+          throw new Error("attribute_equals requires selector and attribute.");
+        }
+        const value = await locator.first().getAttribute(rule.attribute, { timeout });
+        result.observed = value;
+        if (value !== rule.value) {
+          throw new Error(rule.message || `Attribute ${rule.attribute} for ${rule.selector} was "${value}".`);
+        }
+        break;
+      }
+      case "attribute_includes": {
+        if (!locator || !rule.attribute || typeof rule.value !== "string") {
+          throw new Error("attribute_includes requires selector, attribute, and value.");
+        }
+        const value = await locator.first().getAttribute(rule.attribute, { timeout });
+        result.observed = value;
+        if (!(value || "").includes(rule.value)) {
+          throw new Error(rule.message || `Attribute ${rule.attribute} for ${rule.selector} did not include "${rule.value}".`);
+        }
+        break;
+      }
+      case "count_at_least":
+        if (!locator || !Number.isFinite(rule.min)) {
+          throw new Error("count_at_least requires selector and min.");
+        }
+        result.observed = `${count} match(es)`;
+        if (count < rule.min) {
+          throw new Error(rule.message || `${rule.selector} matched ${count} element(s), below ${rule.min}.`);
+        }
+        break;
+      case "count_at_most":
+        if (!locator || !Number.isFinite(rule.max)) {
+          throw new Error("count_at_most requires selector and max.");
+        }
+        result.observed = `${count} match(es)`;
+        if (count > rule.max) {
+          throw new Error(rule.message || `${rule.selector} matched ${count} element(s), above ${rule.max}.`);
+        }
+        break;
+      case "url_includes": {
+        if (typeof rule.value !== "string") {
+          throw new Error("url_includes requires a value.");
+        }
+        const url = page.url();
+        result.observed = url;
+        if (!url.includes(rule.value)) {
+          throw new Error(rule.message || `URL "${url}" did not include "${rule.value}".`);
+        }
+        break;
+      }
+      default:
+        throw new Error(`Unsupported custom requirement type: ${rule.type}`);
+    }
+  } catch (error) {
+    result.success = false;
+    result.error = error instanceof Error ? error.message : String(error);
+  }
+
+  return result;
+}
+
+async function openAuditPage(page, url, timeout, wait) {
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout,
+  });
+
+  await page.waitForLoadState("networkidle", {
+    timeout: Math.min(timeout, 15000),
+  }).catch(() => {});
+
+  if (wait > 0) {
+    await page.waitForTimeout(wait);
+  }
+}
+
+async function runRequirementsAssessment(context, page, options, requirements) {
+  if (!requirements) {
+    return null;
+  }
+
+  const pageUrl = page.url();
+  const ruleResults = [];
+  for (const rule of requirements.rules.filter((item) => matchesRequirementScope(pageUrl, item))) {
+    ruleResults.push(await evaluateRequirementRule(page, rule));
+  }
+
+  const journeyResults = [];
+  for (const journey of requirements.journeys.filter((item) => matchesRequirementScope(pageUrl, item))) {
+    const journeyPage = await context.newPage();
+    try {
+      await openAuditPage(journeyPage, journey.startUrl ? new URL(journey.startUrl, pageUrl).toString() : pageUrl, options.timeout, journey.wait ?? options.wait);
+      const result = await runJourney(journeyPage, journey);
+      journeyResults.push({
+        id: journey.id || journey.name || "custom-journey",
+        name: result.name,
+        severity: journey.severity || "serious",
+        success: result.success,
+        failedSteps: result.failedSteps,
+        results: result.results,
+        sourceFile: journey.sourceFile || null,
+      });
+    } finally {
+      await journeyPage.close().catch(() => {});
+    }
+  }
+
+  const failedRuleCount = ruleResults.filter((item) => !item.success).length;
+  const failedJourneyCount = journeyResults.filter((item) => !item.success).length;
+  const passCount =
+    ruleResults.filter((item) => item.success).length + journeyResults.filter((item) => item.success).length;
+
+  return {
+    name: requirements.name,
+    file: requirements.file,
+    ruleResults,
+    journeyResults,
+    failedRuleCount,
+    failedJourneyCount,
+    passCount,
+    failureCount: failedRuleCount + failedJourneyCount,
+  };
+}
+
 async function collectReflowChecks(page, widths) {
   const originalViewport = page.viewportSize() || { width: 1440, height: 960 };
   const checks = [];
@@ -1414,13 +1639,23 @@ async function collectReflowChecks(page, widths) {
   return checks;
 }
 
-function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast, mobileChecks = [], reflowChecks = []) {
+function buildSummary(
+  axeViolations,
+  keyboard,
+  semantics,
+  form,
+  nonTextContrast,
+  mobileChecks = [],
+  reflowChecks = [],
+  requirements = null,
+) {
   const impactCounts = summarizeImpactCounts(axeViolations);
   const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
   const screenReaderWarnings = [];
   const formWarnings = [];
   const nonTextContrastWarnings = [];
+  const customRequirementWarnings = [];
 
   if (!semantics.page.lang) {
     screenReaderWarnings.push("The page is missing a root html[lang] attribute.");
@@ -1490,6 +1725,14 @@ function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast,
     );
   }
 
+  if (requirements?.failedRuleCount > 0) {
+    customRequirementWarnings.push(`Detected ${requirements.failedRuleCount} custom rule failure(s).`);
+  }
+
+  if (requirements?.failedJourneyCount > 0) {
+    customRequirementWarnings.push(`Detected ${requirements.failedJourneyCount} custom journey failure(s).`);
+  }
+
   return {
     axeViolationCount: axeViolations.length,
     axeImpactCounts: impactCounts,
@@ -1500,9 +1743,12 @@ function buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast,
     nonTextContrastWarningCount:
       nonTextContrast.counts.lowContrastBoundaries + nonTextContrast.counts.lowContrastIcons,
     mobileWarningCount: mobileChecks.filter((check) => check.warningCount > 0).length,
+    customRequirementFailureCount: requirements?.failureCount || 0,
+    customRequirementPassCount: requirements?.passCount || 0,
     journeyFailureCount: 0,
     keyboardWarningCount: keyboard.warnings.length,
     reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
+    customRequirementWarnings,
     formWarnings,
     nonTextContrastWarnings,
     screenReaderWarningCount: screenReaderWarnings.length,
@@ -1526,6 +1772,7 @@ export function renderMarkdown(report) {
   lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
   lines.push(`- Mobile warnings: ${summary.mobileWarningCount}`);
   lines.push(`- Form warnings: ${summary.formWarningCount}`);
+  lines.push(`- Custom requirement failures: ${summary.customRequirementFailureCount}`);
   lines.push(`- Journey failures: ${summary.journeyFailureCount}`);
   lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
   lines.push("");
@@ -1619,6 +1866,42 @@ export function renderMarkdown(report) {
       }
     }
     lines.push("");
+  }
+
+  lines.push("## Custom Requirements");
+  lines.push("");
+  if (!report.requirements) {
+    lines.push("No custom requirements were evaluated for this audit.");
+    lines.push("");
+  } else {
+    lines.push(`- Requirement set: ${report.requirements.name}`);
+    lines.push(`- Passed checks: ${summary.customRequirementPassCount}`);
+    lines.push(`- Failed checks: ${summary.customRequirementFailureCount}`);
+    lines.push("");
+
+    if (summary.customRequirementWarnings.length === 0) {
+      lines.push("No custom requirement failures were generated.");
+      lines.push("");
+    } else {
+      for (const warning of summary.customRequirementWarnings) {
+        lines.push(`- ${warning}`);
+      }
+      lines.push("");
+    }
+
+    for (const item of report.requirements.ruleResults.filter((entry) => !entry.success)) {
+      lines.push(`- ${item.severity}: ${item.id}${item.selector ? ` (${item.selector})` : ""}`);
+      lines.push(`  ${item.error || item.message || "Requirement failed."}`);
+    }
+    for (const item of report.requirements.journeyResults.filter((entry) => !entry.success)) {
+      lines.push(`- ${item.severity}: ${item.name} journey failed with ${item.failedSteps} failed step(s).`);
+    }
+    if (
+      report.requirements.ruleResults.some((entry) => !entry.success) ||
+      report.requirements.journeyResults.some((entry) => !entry.success)
+    ) {
+      lines.push("");
+    }
   }
 
   lines.push("## Reflow Checks");
@@ -1788,6 +2071,7 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Pages with mobile warnings: ${summary.pagesWithMobileWarnings}`);
   lines.push(`- Pages with form warnings: ${summary.pagesWithFormWarnings}`);
   lines.push(`- Pages with non-text contrast warnings: ${summary.pagesWithNonTextContrastWarnings}`);
+  lines.push(`- Pages with custom requirement failures: ${summary.pagesWithCustomRequirementFailures}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
   lines.push("");
   lines.push("## Severity Totals");
@@ -1833,6 +2117,7 @@ export function renderAggregateMarkdown(aggregateReport) {
     lines.push(`- Mobile warnings: ${page.summary.mobileWarningCount}`);
     lines.push(`- Form warnings: ${page.summary.formWarningCount}`);
     lines.push(`- Non-text contrast warnings: ${page.summary.nonTextContrastWarningCount}`);
+    lines.push(`- Custom requirement failures: ${page.summary.customRequirementFailureCount}`);
     lines.push(`- Screen-reader warnings: ${page.summary.screenReaderWarningCount}`);
     lines.push("");
   }
@@ -1936,6 +2221,38 @@ function collectSinglePageCsvRows(report, context = {}) {
     rows.push([scope, pageUrl, pageTitle, "non-text-contrast", "warning", "warning", 1, "", "", warning]);
   }
 
+  if (report.requirements) {
+    for (const item of report.requirements.ruleResults.filter((entry) => !entry.success)) {
+      rows.push([
+        scope,
+        pageUrl,
+        pageTitle,
+        "custom-requirement",
+        item.id,
+        item.severity,
+        1,
+        "",
+        item.selector || "",
+        item.error || item.message || "Requirement failed.",
+      ]);
+    }
+
+    for (const item of report.requirements.journeyResults.filter((entry) => !entry.success)) {
+      rows.push([
+        scope,
+        pageUrl,
+        pageTitle,
+        "custom-requirement",
+        item.name,
+        item.severity,
+        1,
+        "",
+        "",
+        `${item.failedSteps} failed step(s).`,
+      ]);
+    }
+  }
+
   for (const item of report.nonTextContrast?.lowContrastBoundaries || []) {
     rows.push([
       scope,
@@ -2018,6 +2335,7 @@ function renderSinglePageHtml(report) {
     { label: "Reflow", value: report.summary.reflowWarningCount },
     { label: "Mobile", value: report.summary.mobileWarningCount },
     { label: "Form", value: report.summary.formWarningCount },
+    { label: "Requirements", value: report.summary.customRequirementFailureCount },
     { label: "Non-text contrast", value: report.summary.nonTextContrastWarningCount },
     { label: "Screen reader", value: report.summary.screenReaderWarningCount },
   ]);
@@ -2040,6 +2358,7 @@ function renderSinglePageHtml(report) {
     { title: "Mobile warnings", items: (report.mobile || []).flatMap((check) => check.warnings) },
     { title: "Screen-reader proxy warnings", items: report.summary.screenReaderWarnings },
     { title: "Form warnings", items: report.summary.formWarnings },
+    { title: "Custom requirement failures", items: report.summary.customRequirementWarnings },
     { title: "Non-text contrast warnings", items: report.summary.nonTextContrastWarnings },
   ]
     .map(({ title, items }) => {
@@ -2087,6 +2406,14 @@ function renderSinglePageHtml(report) {
       </section>`
     : "";
 
+  const requirementsSection = !report.requirements
+    ? ""
+    : `
+      <section class="panel" style="margin-top:20px;">
+        <h2>Custom Requirements</h2>
+        <p>${escapeHtml(report.requirements.name)}. Failed checks: ${escapeHtml(report.summary.customRequirementFailureCount)}</p>
+      </section>`;
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -2127,6 +2454,7 @@ function renderSinglePageHtml(report) {
       </div>
       <section class="panel" style="margin-top:20px;"><h2>Mobile</h2>${mobileItems}</section>
       ${journeySection}
+      ${requirementsSection}
       <div class="grid" style="margin-top:20px;">${warningLists}</div>
     </main>
   </body>
@@ -2142,6 +2470,7 @@ function renderAggregateHtml(aggregateReport) {
     { label: "Reflow", value: aggregateReport.summary.pagesWithReflowWarnings },
     { label: "Mobile", value: aggregateReport.summary.pagesWithMobileWarnings },
     { label: "Form", value: aggregateReport.summary.pagesWithFormWarnings },
+    { label: "Requirements", value: aggregateReport.summary.pagesWithCustomRequirementFailures },
     { label: "Non-text contrast", value: aggregateReport.summary.pagesWithNonTextContrastWarnings },
     { label: "Screen reader", value: aggregateReport.summary.pagesWithScreenReaderWarnings },
   ]);
@@ -2152,7 +2481,7 @@ function renderAggregateHtml(aggregateReport) {
         <article class="finding">
           <h3>${escapeHtml(page.metadata.title || page.metadata.url)}</h3>
           <p><a href="${escapeHtml(page.metadata.url)}">${escapeHtml(page.metadata.url)}</a></p>
-          <p>Axe: ${page.summary.axeViolationCount} | Keyboard: ${page.summary.keyboardWarningCount} | Mobile: ${page.summary.mobileWarningCount} | Form: ${page.summary.formWarningCount} | Non-text contrast: ${page.summary.nonTextContrastWarningCount}</p>
+          <p>Axe: ${page.summary.axeViolationCount} | Keyboard: ${page.summary.keyboardWarningCount} | Mobile: ${page.summary.mobileWarningCount} | Form: ${page.summary.formWarningCount} | Requirements: ${page.summary.customRequirementFailureCount} | Non-text contrast: ${page.summary.nonTextContrastWarningCount}</p>
         </article>`,
     )
     .join("");
@@ -2238,6 +2567,7 @@ export async function auditPageInContext(context, options) {
     timeout = 45000,
     wait = 1000,
     journey = null,
+    requirements = null,
     reflowCheck = false,
     reflowWidths = [320, 768],
     mobileCheck = false,
@@ -2254,32 +2584,23 @@ export async function auditPageInContext(context, options) {
   const page = await context.newPage();
 
   try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout,
-    });
-
-    await page.waitForLoadState("networkidle", {
-      timeout: Math.min(timeout, 15000),
-    }).catch(() => {});
-
-    if (wait > 0) {
-      await page.waitForTimeout(wait);
-    }
+    await openAuditPage(page, url, timeout, wait);
 
     const title = await page.title();
     const axeRaw = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa", "best-practice"])
       .analyze();
+    const axeViolations = applyAxeSeverityOverrides(axeRaw.violations, requirements?.severityOverrides?.axe || {});
 
     const keyboard = await runKeyboardAudit(page, tabLimit);
     const semantics = await collectSemanticSignals(page);
     const reflow = reflowCheck ? await collectReflowChecks(page, reflowWidths) : [];
     const mobile = mobileCheck ? await collectMobileChecks(page, mobileViewports) : [];
-    const journeyReport = journey ? await runJourney(page, journey) : null;
     const form = await collectFormSignals(page);
     const nonTextContrast = await collectNonTextContrastSignals(page);
-    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, nonTextContrast, mobile, reflow);
+    const requirementsReport = await runRequirementsAssessment(context, page, { timeout, wait }, requirements);
+    const journeyReport = journey ? await runJourney(page, journey) : null;
+    const summary = buildSummary(axeViolations, keyboard, semantics, form, nonTextContrast, mobile, reflow, requirementsReport);
     const report = {
       metadata: {
         url: page.url(),
@@ -2290,7 +2611,7 @@ export async function auditPageInContext(context, options) {
       summary,
       axe: {
         passes: axeRaw.passes.length,
-        violations: simplifyAxeResults(axeRaw.violations),
+        violations: simplifyAxeResults(axeViolations),
         incomplete: simplifyAxeResults(axeRaw.incomplete),
         inapplicable: axeRaw.inapplicable.length,
       },
@@ -2302,13 +2623,17 @@ export async function auditPageInContext(context, options) {
       nonTextContrast,
     };
 
+    if (requirementsReport) {
+      report.requirements = requirementsReport;
+    }
+
     if (journeyReport) {
       report.journey = journeyReport;
       report.summary.journeyFailureCount = report.journey.failedSteps;
     }
 
     if (screenshots && assetDir) {
-      report.evidence = await captureEvidence(page, axeRaw.violations, keyboard, assetDir, screenshotLimit);
+      report.evidence = await captureEvidence(page, axeViolations, keyboard, assetDir, screenshotLimit);
     }
 
     return report;

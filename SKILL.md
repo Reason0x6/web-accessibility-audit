@@ -30,20 +30,22 @@ Use `--journey-file <json>` when the user needs a scripted keyboard flow or page
 5. Read the generated Markdown summary first, then inspect the JSON report for affected selectors and rule IDs.
 6. Separate automated findings from manual follow-up. Treat keyboard and screen-reader checks as high-value heuristics, not full assistive-technology validation.
 7. When the user asks for real screen-reader validation, load [references/screen-reader-manual-matrix.md](./references/screen-reader-manual-matrix.md) and use its matrix and recording format.
+8. When the user needs project-specific rules, load [references/requirements-config.md](./references/requirements-config.md) and pass `--requirements-file <json>`.
 
 ## Command Options
 
 Run the script with:
 
 ```powershell
-node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
-node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
+node scripts/audit-url.mjs --url <page-url> [--out reports/custom-name] [--requirements-file path/to/requirements.json] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
+node scripts/crawl-site.mjs --url <seed-url> [--max-pages 5] [--out reports/site-crawl] [--requirements-file path/to/requirements.json] [--tab-limit 25] [--timeout 45000] [--wait 1000] [--skip-reflow-check] [--reflow-widths 320,768] [--skip-mobile-check] [--mobile-viewports 390x844,360x800] [--skip-screenshots] [--screenshot-limit 10]
 ```
 
 Supported options:
 
 - `--url`: Required target URL. A positional URL also works.
 - `--out`: Output base path without extension. The script writes `<base>.json`, `<base>.md`, `<base>.html`, and `<base>.csv`.
+- `--requirements-file`: Load project-specific settings, custom rules, custom journeys, and severity overrides from JSON.
 - `--tab-limit`: Maximum number of `Tab` presses to sample for keyboard traversal.
 - `--timeout`: Navigation timeout in milliseconds.
 - `--wait`: Extra post-load wait in milliseconds for client-rendered pages.
@@ -71,6 +73,7 @@ Supported options:
 - Mobile viewport checks for small touch targets and horizontal scrolling at phone-sized widths.
 - Scripted keyboard journeys with route, state-change, or visibility assertions when a `--journey-file` is supplied.
 - CSV and HTML exports for both single-page audits and crawls.
+- Config-driven custom requirements, including scoped rules, scoped journeys, and axe severity overrides.
 
 ## Journey Files
 
@@ -94,6 +97,7 @@ Use a JSON file with a `steps` array. Supported actions:
 
 Example: [keyboard-home-to-tp7.json](./scripts/examples/keyboard-home-to-tp7.json)
 State-change example: [tp7-invalid-url-state.json](./scripts/examples/tp7-invalid-url-state.json)
+Requirements example: [localhost-requirements.json](./scripts/examples/localhost-requirements.json)
 
 ## Interpretation Rules
 
