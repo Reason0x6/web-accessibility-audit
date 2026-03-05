@@ -35,6 +35,7 @@ Meaningfulness: Very high. Focus management and announcements often fail during 
 Implementation direction: Add a journey mode with explicit actions and assertions for focus and live regions.
 
 7. `P1` Form accessibility checks
+Status: Implemented in this iteration.
 Meaningfulness: High. Forms are frequent sources of blocking defects.
 Implementation direction: Expand label, required-state, autocomplete, and validation-message detection.
 

@@ -221,6 +221,7 @@ function buildAggregateSummary(pages) {
   let totalAxeViolations = 0;
   let pagesWithKeyboardWarnings = 0;
   let pagesWithReflowWarnings = 0;
+  let pagesWithFormWarnings = 0;
   let pagesWithScreenReaderWarnings = 0;
 
   for (const page of pages) {
@@ -230,6 +231,9 @@ function buildAggregateSummary(pages) {
     }
     if (page.summary.reflowWarningCount > 0) {
       pagesWithReflowWarnings += 1;
+    }
+    if (page.summary.formWarningCount > 0) {
+      pagesWithFormWarnings += 1;
     }
     if (page.summary.screenReaderWarningCount > 0) {
       pagesWithScreenReaderWarnings += 1;
@@ -265,6 +269,7 @@ function buildAggregateSummary(pages) {
     wcagSummary,
     pagesWithKeyboardWarnings,
     pagesWithReflowWarnings,
+    pagesWithFormWarnings,
     pagesWithScreenReaderWarnings,
     topViolationRules,
   };

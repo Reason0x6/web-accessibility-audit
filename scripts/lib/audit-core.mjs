@@ -480,6 +480,281 @@ async function collectSemanticSignals(page) {
   });
 }
 
+async function collectFormSignals(page) {
+  return page.evaluate(() => {
+    function selectorFor(element) {
+      if (element.id) {
+        return `#${element.id}`;
+      }
+
+      const name = element.getAttribute("name");
+      if (name) {
+        return `${element.tagName.toLowerCase()}[name="${name}"]`;
+      }
+
+      const type = element.getAttribute("type");
+      if (type) {
+        return `${element.tagName.toLowerCase()}[type="${type}"]`;
+      }
+
+      return element.tagName.toLowerCase();
+    }
+
+    function textFor(element) {
+      return (element.innerText || element.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
+    }
+
+    function hasAssociatedLabel(element) {
+      if ("labels" in element && element.labels && element.labels.length > 0) {
+        return true;
+      }
+
+      const id = element.getAttribute("id");
+      return Boolean(id && document.querySelector(`label[for="${CSS.escape(id)}"]`));
+    }
+
+    function hasAccessibleName(element) {
+      const ariaLabel = element.getAttribute("aria-label");
+      if (ariaLabel && ariaLabel.trim()) {
+        return true;
+      }
+
+      const labelledBy = element.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const text = labelledBy
+          .split(/\s+/)
+          .map((id) => document.getElementById(id))
+          .filter(Boolean)
+          .map((node) => textFor(node))
+          .join(" ")
+          .trim();
+
+        if (text) {
+          return true;
+        }
+      }
+
+      if (hasAssociatedLabel(element)) {
+        return true;
+      }
+
+      return Boolean(textFor(element));
+    }
+
+    function describeControl(element, extra = {}) {
+      return {
+        selector: selectorFor(element),
+        type: element.getAttribute("type") || element.tagName.toLowerCase(),
+        name: element.getAttribute("name") || "",
+        ...extra,
+      };
+    }
+
+    function closestFieldContainer(element) {
+      return (
+        element.closest("label, fieldset, .control-field, [role='group'], [role='radiogroup']") ||
+        element.parentElement
+      );
+    }
+
+    function expectedAutocomplete(element) {
+      if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+        return null;
+      }
+
+      if (element.disabled || element.readOnly) {
+        return null;
+      }
+
+      const type = (element.getAttribute("type") || "").toLowerCase();
+      const fingerprint = [
+        type,
+        element.getAttribute("name") || "",
+        element.getAttribute("id") || "",
+        element.getAttribute("placeholder") || "",
+        textFor(closestFieldContainer(element) || element),
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      if (type === "email" || /\bemail\b/.test(fingerprint)) {
+        return "email";
+      }
+      if (type === "tel" || /\b(phone|mobile|tel)\b/.test(fingerprint)) {
+        return "tel";
+      }
+      if (type === "url" || /\b(url|website|youtube|link)\b/.test(fingerprint)) {
+        return "url";
+      }
+      if (type === "search" || /\bsearch\b/.test(fingerprint)) {
+        return "search";
+      }
+      if (/\b(first.?name|given.?name)\b/.test(fingerprint)) {
+        return "given-name";
+      }
+      if (/\b(last.?name|family.?name|surname)\b/.test(fingerprint)) {
+        return "family-name";
+      }
+      if (/\b(full.?name|your name|contact name)\b/.test(fingerprint)) {
+        return "name";
+      }
+      if (/\b(address line 1|street address|address1)\b/.test(fingerprint)) {
+        return "address-line1";
+      }
+      if (/\b(address line 2|suite|unit|apartment|address2)\b/.test(fingerprint)) {
+        return "address-line2";
+      }
+      if (/\b(city|suburb|town)\b/.test(fingerprint)) {
+        return "address-level2";
+      }
+      if (/\b(state|province|region)\b/.test(fingerprint)) {
+        return "address-level1";
+      }
+      if (/\b(postcode|postal|zip)\b/.test(fingerprint)) {
+        return "postal-code";
+      }
+      if (/\bcountry\b/.test(fingerprint)) {
+        return "country";
+      }
+
+      return null;
+    }
+
+    function findNearbyError(element) {
+      const describedBy = (element.getAttribute("aria-describedby") || "")
+        .split(/\s+/)
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+      const ariaErrorMessage = element.getAttribute("aria-errormessage");
+      const explicitError = ariaErrorMessage ? document.getElementById(ariaErrorMessage) : null;
+
+      const candidates = [...describedBy];
+      if (explicitError) {
+        candidates.push(explicitError);
+      }
+
+      const container = closestFieldContainer(element);
+      if (container) {
+        if (container.nextElementSibling) {
+          candidates.push(container.nextElementSibling);
+        }
+
+        for (const node of container.querySelectorAll("[role='alert'], [aria-live], .error, .invalid")) {
+          candidates.push(node);
+        }
+      }
+
+      const seen = new Set();
+      for (const candidate of candidates) {
+        if (!(candidate instanceof Element) || seen.has(candidate)) {
+          continue;
+        }
+        seen.add(candidate);
+
+        const text = textFor(candidate);
+        if (!text) {
+          continue;
+        }
+
+        if (!/\b(valid|invalid|required|error|must|enter|select|choose|format)\b/i.test(text)) {
+          continue;
+        }
+
+        const id = candidate.getAttribute("id");
+        const isAssociated =
+          Boolean(
+            id &&
+              ((element.getAttribute("aria-describedby") || "")
+                .split(/\s+/)
+                .includes(id) ||
+                element.getAttribute("aria-errormessage") === id),
+          ) || describedBy.includes(candidate) || explicitError === candidate;
+
+        return {
+          text,
+          associated: isAssociated,
+        };
+      }
+
+      return null;
+    }
+
+    const controls = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'));
+
+    const missingAutocomplete = [];
+    const placeholderOnlyControls = [];
+    const requiredCueOnly = [];
+    const invalidWithoutState = [];
+    const unassociatedErrorMessages = [];
+
+    for (const control of controls) {
+      if (!hasAccessibleName(control) && control.getAttribute("placeholder")) {
+        placeholderOnlyControls.push(
+          describeControl(control, {
+            placeholder: control.getAttribute("placeholder"),
+          }),
+        );
+      }
+
+      const autocomplete = control.getAttribute("autocomplete");
+      const expectedToken = expectedAutocomplete(control);
+      if (expectedToken && !autocomplete) {
+        missingAutocomplete.push(
+          describeControl(control, {
+            expected: expectedToken,
+          }),
+        );
+      }
+
+      const containerText = textFor(closestFieldContainer(control) || control);
+      const requiredHintPresent = /\brequired\b/.test(containerText.toLowerCase()) || containerText.includes("*");
+      const hasProgrammaticRequired =
+        control.hasAttribute("required") || control.getAttribute("aria-required") === "true";
+      if (requiredHintPresent && !hasProgrammaticRequired) {
+        requiredCueOnly.push(describeControl(control));
+      }
+
+      const error = findNearbyError(control);
+      if (error) {
+        if (control.getAttribute("aria-invalid") !== "true") {
+          invalidWithoutState.push(
+            describeControl(control, {
+              message: error.text,
+            }),
+          );
+        }
+
+        if (!error.associated) {
+          unassociatedErrorMessages.push(
+            describeControl(control, {
+              message: error.text,
+            }),
+          );
+        }
+      }
+    }
+
+    return {
+      controls: controls.length,
+      missingAutocomplete: missingAutocomplete.slice(0, 10),
+      placeholderOnlyControls: placeholderOnlyControls.slice(0, 10),
+      requiredCueOnly: requiredCueOnly.slice(0, 10),
+      invalidWithoutState: invalidWithoutState.slice(0, 10),
+      unassociatedErrorMessages: unassociatedErrorMessages.slice(0, 10),
+      counts: {
+        missingAutocomplete: missingAutocomplete.length,
+        placeholderOnlyControls: placeholderOnlyControls.length,
+        requiredCueOnly: requiredCueOnly.length,
+        invalidWithoutState: invalidWithoutState.length,
+        unassociatedErrorMessages: unassociatedErrorMessages.length,
+      },
+    };
+  });
+}
+
 async function describeFocusedElement(page) {
   return page.evaluate(() => {
     const active = document.activeElement;
@@ -851,11 +1126,12 @@ async function collectReflowChecks(page, widths) {
   return checks;
 }
 
-function buildSummary(axeViolations, keyboard, semantics, reflowChecks = []) {
+function buildSummary(axeViolations, keyboard, semantics, form, reflowChecks = []) {
   const impactCounts = summarizeImpactCounts(axeViolations);
   const simplifiedViolations = simplifyAxeResults(axeViolations);
   const contrastViolations = axeViolations.filter((item) => item.id === "color-contrast");
   const screenReaderWarnings = [];
+  const formWarnings = [];
 
   if (!semantics.page.lang) {
     screenReaderWarnings.push("The page is missing a root html[lang] attribute.");
@@ -891,15 +1167,39 @@ function buildSummary(axeViolations, keyboard, semantics, reflowChecks = []) {
     );
   }
 
+  if (form.counts.missingAutocomplete > 0) {
+    formWarnings.push(
+      `Detected ${form.counts.missingAutocomplete} field(s) that look autofill-eligible but do not declare autocomplete.`,
+    );
+  }
+
+  if (form.counts.placeholderOnlyControls > 0) {
+    formWarnings.push(`Detected ${form.counts.placeholderOnlyControls} field(s) relying on placeholder text instead of labels.`);
+  }
+
+  if (form.counts.requiredCueOnly > 0) {
+    formWarnings.push(`Detected ${form.counts.requiredCueOnly} field(s) with a visible required cue but no programmatic required state.`);
+  }
+
+  if (form.counts.invalidWithoutState > 0) {
+    formWarnings.push(`Detected ${form.counts.invalidWithoutState} invalid field(s) without aria-invalid=\"true\".`);
+  }
+
+  if (form.counts.unassociatedErrorMessages > 0) {
+    formWarnings.push(`Detected ${form.counts.unassociatedErrorMessages} validation message(s) not tied to a field via aria-describedby or aria-errormessage.`);
+  }
+
   return {
     axeViolationCount: axeViolations.length,
     axeImpactCounts: impactCounts,
     severityBuckets: buildSeverityBuckets(simplifiedViolations),
     wcagSummary: buildWcagSummary(simplifiedViolations),
     contrastViolationCount: contrastViolations.length,
+    formWarningCount: formWarnings.length,
     journeyFailureCount: 0,
     keyboardWarningCount: keyboard.warnings.length,
     reflowWarningCount: reflowChecks.filter((check) => check.warningCount > 0).length,
+    formWarnings,
     screenReaderWarningCount: screenReaderWarnings.length,
     screenReaderWarnings,
   };
@@ -907,7 +1207,7 @@ function buildSummary(axeViolations, keyboard, semantics, reflowChecks = []) {
 
 export function renderMarkdown(report) {
   const lines = [];
-  const { metadata, summary, keyboard, semantics, axe } = report;
+  const { metadata, summary, keyboard, semantics, form, axe } = report;
 
   lines.push(`# Accessibility Audit: ${metadata.title || metadata.url}`);
   lines.push("");
@@ -918,6 +1218,7 @@ export function renderMarkdown(report) {
   lines.push(`- Contrast violations: ${summary.contrastViolationCount}`);
   lines.push(`- Keyboard warnings: ${summary.keyboardWarningCount}`);
   lines.push(`- Reflow warnings: ${summary.reflowWarningCount}`);
+  lines.push(`- Form warnings: ${summary.formWarningCount}`);
   lines.push(`- Journey failures: ${summary.journeyFailureCount}`);
   lines.push(`- Screen-reader warnings: ${summary.screenReaderWarningCount}`);
   lines.push("");
@@ -1053,6 +1354,43 @@ export function renderMarkdown(report) {
     lines.push("");
   }
 
+  lines.push("## Form Checks");
+  lines.push("");
+  lines.push(`- Controls sampled: ${form.controls}`);
+  lines.push(`- Missing autocomplete: ${form.counts.missingAutocomplete}`);
+  lines.push(`- Placeholder-only labels: ${form.counts.placeholderOnlyControls}`);
+  lines.push(`- Required cue without required state: ${form.counts.requiredCueOnly}`);
+  lines.push(`- Invalid fields missing aria-invalid: ${form.counts.invalidWithoutState}`);
+  lines.push(`- Unassociated error messages: ${form.counts.unassociatedErrorMessages}`);
+  lines.push("");
+
+  if (summary.formWarnings.length === 0) {
+    lines.push("No form-specific warnings were generated.");
+    lines.push("");
+  } else {
+    for (const warning of summary.formWarnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  const formExamples = [
+    ...form.missingAutocomplete.map((item) => `Missing autocomplete on ${item.selector} (expected ${item.expected}).`),
+    ...form.placeholderOnlyControls.map((item) => `Placeholder-only label candidate: ${item.selector}.`),
+    ...form.requiredCueOnly.map((item) => `Required cue without required state: ${item.selector}.`),
+    ...form.invalidWithoutState.map((item) => `Invalid field without aria-invalid: ${item.selector}.`),
+    ...form.unassociatedErrorMessages.map(
+      (item) => `Validation message not associated to ${item.selector}: ${trimText(item.message, 120)}`,
+    ),
+  ].slice(0, 10);
+
+  for (const example of formExamples) {
+    lines.push(`- ${example}`);
+  }
+  if (formExamples.length > 0) {
+    lines.push("");
+  }
+
   if (report.evidence) {
     lines.push("## Evidence");
     lines.push("");
@@ -1090,6 +1428,7 @@ export function renderAggregateMarkdown(aggregateReport) {
   lines.push(`- Total axe violations: ${summary.totalAxeViolations}`);
   lines.push(`- Pages with keyboard warnings: ${summary.pagesWithKeyboardWarnings}`);
   lines.push(`- Pages with reflow warnings: ${summary.pagesWithReflowWarnings}`);
+  lines.push(`- Pages with form warnings: ${summary.pagesWithFormWarnings}`);
   lines.push(`- Pages with screen-reader warnings: ${summary.pagesWithScreenReaderWarnings}`);
   lines.push("");
   lines.push("## Severity Totals");
@@ -1132,6 +1471,7 @@ export function renderAggregateMarkdown(aggregateReport) {
     lines.push(`- URL: ${page.metadata.url}`);
     lines.push(`- Axe violations: ${page.summary.axeViolationCount}`);
     lines.push(`- Keyboard warnings: ${page.summary.keyboardWarningCount}`);
+    lines.push(`- Form warnings: ${page.summary.formWarningCount}`);
     lines.push(`- Screen-reader warnings: ${page.summary.screenReaderWarningCount}`);
     lines.push("");
   }
@@ -1197,7 +1537,9 @@ export async function auditPageInContext(context, options) {
     const keyboard = await runKeyboardAudit(page, tabLimit);
     const semantics = await collectSemanticSignals(page);
     const reflow = reflowCheck ? await collectReflowChecks(page, reflowWidths) : [];
-    const summary = buildSummary(axeRaw.violations, keyboard, semantics, reflow);
+    const journeyReport = journey ? await runJourney(page, journey) : null;
+    const form = await collectFormSignals(page);
+    const summary = buildSummary(axeRaw.violations, keyboard, semantics, form, reflow);
     const report = {
       metadata: {
         url: page.url(),
@@ -1215,10 +1557,11 @@ export async function auditPageInContext(context, options) {
       keyboard,
       reflow,
       semantics,
+      form,
     };
 
-    if (journey) {
-      report.journey = await runJourney(page, journey);
+    if (journeyReport) {
+      report.journey = journeyReport;
       report.summary.journeyFailureCount = report.journey.failedSteps;
     }
 
